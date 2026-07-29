@@ -28,20 +28,17 @@ check() { # check <name> <expected-regex> <output>
 }
 
 # smtp_dialogue <local|remote> <port> <smtp-command>...
-# Sends each command with a 1s pause (postfix rejects blind pipelining).
+# Runs the response-driven driver (test/smtp-dialogue.sh): each command is
+# sent only after the previous reply completes - no fixed sleeps.
 # "local" runs inside the relay container (127.0.0.1 = trusted mynetworks IP);
 # "remote" runs from a helper container whose IP is NOT whitelisted.
 smtp_dialogue() {
     local where=$1 port=$2; shift 2
-    local script="{ sleep 1; printf 'EHLO smoketest\r\n';"
-    local cmd
-    for cmd in "$@"; do script="$script sleep 1; printf '$cmd\r\n';"; done
-    script="$script sleep 1; printf 'QUIT\r\n'; }"
     if [ "$where" = local ]; then
-        docker exec "$RELAY" sh -c "$script | nc -w 15 127.0.0.1 $port"
+        docker exec -i "$RELAY" sh -s -- 127.0.0.1 "$port" "$@" < test/smtp-dialogue.sh
     else
-        docker run --rm --network "${PROJECT}_default" busybox \
-            sh -c "$script | nc -w 15 relay $port"
+        docker run --rm -i --network "${PROJECT}_default" busybox \
+            sh -s -- relay "$port" "$@" < test/smtp-dialogue.sh
     fi
 }
 
