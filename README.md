@@ -79,6 +79,8 @@ The From/sender address on the printer must be one of `config/allowed_senders`.
 | `config/allowed_senders` | Sender whitelist (one address per line) — **required** |
 | `config/printer_accounts` | Optional `user password` lines for SASL accounts |
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise) |
+| `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
+| `scripts/fetch-token.sh` | One-shot Entra ID token fetch (used at startup and by the refresher loop) |
 
 Config changes are applied by `docker compose restart` (everything is rendered
 at container start).
@@ -92,6 +94,14 @@ at container start).
   do STARTTLS; treat printer passwords accordingly (LAN-only).
 - Heads-up: Microsoft is retiring Basic Auth for SMTP submission through 2026 —
   this OAuth2 setup is the supported replacement path.
+
+## Testing
+
+`./test/smoke.sh` boots an isolated stack (dummy credentials, fixture config)
+and replays six SMTP dialogues against ports 25/587: sender whitelist
+enforcement (also for authenticated clients), relay denial for untrusted IPs,
+and printer SASL login. The outbound M365 leg needs real credentials and is
+not covered.
 
 ## Troubleshooting
 
