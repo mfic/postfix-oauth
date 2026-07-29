@@ -39,10 +39,5 @@ smtpd_tls_cert_file = /etc/postfix/cert.pem
 smtpd_tls_key_file = /etc/postfix/key.pem
 smtpd_tls_auth_only = no
 
-# outbound (us -> Microsoft 365 via the Graph sendMail API)
-# The fixed "graph" nexthop makes all recipients of a message one queue
-# destination, so a message is delivered in a single pipe call / Graph request
-# (multiple calls would duplicate delivery to the MIME header recipients).
-default_transport = graph:graph
-graph_destination_recipient_limit = 1000
-graph_destination_concurrency_limit = 5
+# outbound (us -> Microsoft 365): entrypoint.sh appends outbound-graph.cf or
+# outbound-smtp.cf here, depending on OUTBOUND_MODE.

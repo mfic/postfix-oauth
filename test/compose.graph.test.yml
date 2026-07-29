@@ -9,6 +9,7 @@ services:
       CLIENT_SECRET: dummy-secret-for-tests
       POSTFIX_HOSTNAME: mailrelay.test.local
       PRINTER_NETWORKS: ""
+      OUTBOUND_MODE: graph
       TOKEN_ENDPOINT: http://mockgraph:8080/token
       GRAPH_ENDPOINT: http://mockgraph:8080/v1.0
     volumes:
