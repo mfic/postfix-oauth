@@ -1,0 +1,14 @@
+services:
+  relay:
+    build: ..
+    container_name: postfix-oauth-test-relay
+    hostname: mailrelay.test.local
+    environment:
+      TENANT_ID: 00000000-0000-0000-0000-000000000000
+      CLIENT_ID: 00000000-0000-0000-0000-000000000000
+      CLIENT_SECRET: dummy-secret-for-tests
+      RELAY_MAILBOX: printers@example.com
+      POSTFIX_HOSTNAME: mailrelay.test.local
+      PRINTER_NETWORKS: ""
+    volumes:
+      - ./fixtures:/config:ro
