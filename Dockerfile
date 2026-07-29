@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libjsoncpp26 \
         curl \
         jq \
+        gettext-base \
         ca-certificates \
         netcat-openbsd \
         busybox \
@@ -35,9 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=build /out/ /
 
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-COPY scripts/token-refresher.sh /usr/local/bin/token-refresher.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/token-refresher.sh
+COPY postfix/master.cf /etc/postfix/master.cf
+COPY postfix/sasl-smtpd.conf /etc/postfix/sasl/smtpd.conf
+COPY postfix/main.cf.tmpl postfix/sasl-xoauth2.conf.tmpl /usr/local/share/postfix-relay/
+COPY scripts/entrypoint.sh scripts/token-refresher.sh scripts/fetch-token.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/token-refresher.sh /usr/local/bin/fetch-token.sh
 
 EXPOSE 25 587
 

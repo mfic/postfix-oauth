@@ -1,0 +1,53 @@
+# Rendered to /etc/postfix/main.cf at container start; only ${VARS} listed in
+# entrypoint.sh are substituted - Postfix's own $parameters stay literal.
+myhostname = ${POSTFIX_HOSTNAME}
+mydomain = ${POSTFIX_DOMAIN}
+myorigin = $myhostname
+mydestination =
+local_recipient_maps =
+local_transport = error:local delivery is disabled
+alias_maps =
+append_dot_mydomain = no
+biff = no
+compatibility_level = 3.6
+maillog_file = /dev/stdout
+smtpd_banner = $myhostname ESMTP
+message_size_limit = 52428800
+
+# who may relay without auth: the printers' fixed IPs
+mynetworks = 127.0.0.0/8 [::1]/128 ${PRINTER_NETWORKS}
+
+# inbound (printers -> us)
+smtpd_helo_required = yes
+smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
+smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
+# sender whitelist applies to EVERYONE, including whitelisted IPs and
+# authenticated printers: unknown MAIL FROM -> 550
+smtpd_sender_restrictions = check_sender_access hash:/etc/postfix/allowed_senders, reject
+
+# optional username/password auth for printers (sasldb, enabled on 25 and 587)
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_type = cyrus
+smtpd_sasl_path = smtpd
+smtpd_sasl_local_domain = $myhostname
+smtpd_sasl_security_options = noanonymous
+broken_sasl_auth_clients = yes
+
+# STARTTLS offered but not forced (printers often can't do TLS)
+smtpd_tls_security_level = may
+smtpd_tls_cert_file = /etc/postfix/cert.pem
+smtpd_tls_key_file = /etc/postfix/key.pem
+smtpd_tls_auth_only = no
+
+# outbound (us -> Microsoft 365 via XOAUTH2)
+relayhost = [smtp.office365.com]:587
+smtp_sasl_auth_enable = yes
+smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
+smtp_sasl_security_options =
+smtp_sasl_mechanism_filter = xoauth2
+smtp_tls_security_level = encrypt
+smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
+smtp_tls_loglevel = 1
+# M365 rejects mail whose envelope sender isn't the authenticated mailbox or a
+# SendAs-permitted address; retry a few times, then bounce back to the printer
+smtp_sender_dependent_authentication = no
