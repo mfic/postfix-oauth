@@ -39,15 +39,10 @@ smtpd_tls_cert_file = /etc/postfix/cert.pem
 smtpd_tls_key_file = /etc/postfix/key.pem
 smtpd_tls_auth_only = no
 
-# outbound (us -> Microsoft 365 via XOAUTH2)
-relayhost = [smtp.office365.com]:587
-smtp_sasl_auth_enable = yes
-smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
-smtp_sasl_security_options =
-smtp_sasl_mechanism_filter = xoauth2
-smtp_tls_security_level = encrypt
-smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
-smtp_tls_loglevel = 1
-# M365 rejects mail whose envelope sender isn't the authenticated mailbox or a
-# SendAs-permitted address; retry a few times, then bounce back to the printer
-smtp_sender_dependent_authentication = no
+# outbound (us -> Microsoft 365 via the Graph sendMail API)
+# The fixed "graph" nexthop makes all recipients of a message one queue
+# destination, so a message is delivered in a single pipe call / Graph request
+# (multiple calls would duplicate delivery to the MIME header recipients).
+default_transport = graph:graph
+graph_destination_recipient_limit = 1000
+graph_destination_concurrency_limit = 5
