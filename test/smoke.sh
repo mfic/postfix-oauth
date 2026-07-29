@@ -71,6 +71,27 @@ check "authenticated printer may relay" '250 2\.1\.5' "$out"
 out=$(smtp_dialogue remote 587 "AUTH PLAIN $auth" 'MAIL FROM:<evil@nowhere.com>' 'RCPT TO:<user@example.org>')
 check "whitelist also binds authenticated clients" '554 5\.7\.1 .*Sender address rejected' "$out"
 
+# --- end to end: an accepted message reaches Graph sendMail -----------------
+out=$(smtp_dialogue local 25 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@example.org>' \
+    'DATA' 'From: printers@example.com' 'To: user@example.org' 'Subject: smoke' '' \
+    'SMOKE MARKER 4213' '.')
+check "message accepted for delivery" '250 2\.0\.0 Ok: queued' "$out"
+
+sent=""
+for _ in $(seq 1 20); do
+    sent=$(docker exec postfix-oauth-test-mockgraph sh -c \
+        'grep sendMail /state/requests.jsonl 2>/dev/null | tail -1')
+    [ -n "$sent" ] && break
+    sleep 1
+done
+check "delivered to the sender's Graph sendMail endpoint" \
+    '/v1.0/users/printers@example.com/sendMail' "$sent"
+check "delivery used the token from the mock Entra endpoint" \
+    'Bearer test-token-123' "$sent"
+decoded=$(printf '%s' "$sent" \
+    | python3 -c "import sys,json,base64;print(base64.b64decode(json.loads(sys.stdin.read())['body']).decode('utf-8','replace'))" 2>/dev/null)
+check "Graph received the original message body" 'SMOKE MARKER 4213' "$decoded"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

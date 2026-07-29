@@ -7,8 +7,18 @@ services:
       TENANT_ID: 00000000-0000-0000-0000-000000000000
       CLIENT_ID: 00000000-0000-0000-0000-000000000000
       CLIENT_SECRET: dummy-secret-for-tests
-      RELAY_MAILBOX: printers@example.com
       POSTFIX_HOSTNAME: mailrelay.test.local
       PRINTER_NETWORKS: ""
+      TOKEN_ENDPOINT: http://mockgraph:8080/token
+      GRAPH_ENDPOINT: http://mockgraph:8080/v1.0
     volumes:
       - ./fixtures:/config:ro
+    depends_on:
+      - mockgraph
+
+  mockgraph:
+    image: python:3-alpine
+    container_name: postfix-oauth-test-mockgraph
+    volumes:
+      - ./mock-graph.py:/mock-graph.py:ro
+    command: ["sh", "-c", "mkdir -p /state && exec python3 /mock-graph.py 8080 /state"]

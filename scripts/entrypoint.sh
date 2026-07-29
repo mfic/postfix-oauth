@@ -4,15 +4,11 @@ set -eu
 : "${TENANT_ID:?TENANT_ID is required}"
 : "${CLIENT_ID:?CLIENT_ID is required}"
 : "${CLIENT_SECRET:?CLIENT_SECRET is required}"
-: "${RELAY_MAILBOX:?RELAY_MAILBOX is required (the M365 mailbox Postfix authenticates as)}"
 export POSTFIX_HOSTNAME="${POSTFIX_HOSTNAME:-mailrelay.local}"
 export POSTFIX_DOMAIN="${POSTFIX_HOSTNAME#*.}"
 export PRINTER_NETWORKS="${PRINTER_NETWORKS:-}"
 
 TEMPLATES=/usr/local/share/postfix-relay
-
-# syslog to container stdout (sasl-xoauth2 logs failures via syslog)
-busybox syslogd -n -O /proc/1/fd/1 &
 
 # ---------------------------------------------------------------- TLS cert
 # Self-signed cert for STARTTLS unless one is mounted at /config/tls
@@ -53,16 +49,14 @@ fi
 # ------------------------------------------------- render config templates
 envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${PRINTER_NETWORKS}' \
     < "$TEMPLATES/main.cf.tmpl" > /etc/postfix/main.cf
-envsubst '${TENANT_ID} ${CLIENT_ID} ${CLIENT_SECRET}' \
-    < "$TEMPLATES/sasl-xoauth2.conf.tmpl" > /etc/sasl-xoauth2.conf
-chmod 600 /etc/sasl-xoauth2.conf
 
-mkdir -p /etc/tokens
-cat > /etc/postfix/sasl_passwd <<EOF
-[smtp.office365.com]:587 ${RELAY_MAILBOX}:/etc/tokens/token
+# Postfix scrubs the environment of pipe(8) commands, so graph-send.sh reads
+# its settings from this file (GRAPH_ENDPOINT is overridable for tests).
+mkdir -p /etc/tokens /etc/postfix-relay
+cat > /etc/postfix-relay/graph-send.env <<EOF
+GRAPH_ENDPOINT=${GRAPH_ENDPOINT:-https://graph.microsoft.com/v1.0}
+TOKEN_FILE=/etc/tokens/token
 EOF
-chmod 600 /etc/postfix/sasl_passwd
-postmap hash:/etc/postfix/sasl_passwd
 
 # fix up the spool volume ownership on first run, then lint the rendered config
 postfix set-permissions >/dev/null 2>&1 || true

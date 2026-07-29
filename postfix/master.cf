@@ -28,3 +28,6 @@ lmtp       unix  -       -       n       -       -       lmtp
 anvil      unix  -       -       n       -       1       anvil
 scache     unix  -       -       n       -       1       scache
 postlog    unix-dgram n  -       n       -       1       postlogd
+# outbound delivery: one Graph sendMail POST per message (see main.cf)
+graph      unix  -       n       n       -       10      pipe
+  user=nobody argv=/usr/local/bin/graph-send.sh ${sender} ${recipient}
