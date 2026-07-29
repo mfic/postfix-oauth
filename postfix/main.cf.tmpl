@@ -39,5 +39,5 @@ smtpd_tls_cert_file = /etc/postfix/cert.pem
 smtpd_tls_key_file = /etc/postfix/key.pem
 smtpd_tls_auth_only = no
 
-# outbound (us -> Microsoft 365): entrypoint.sh appends outbound-graph.cf or
-# outbound-smtp.cf here, depending on OUTBOUND_MODE.
+# outbound (us -> Microsoft 365): the outbound-<OUTBOUND_MODE>.sh adapter
+# appends its transport settings here at container start.

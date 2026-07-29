@@ -38,11 +38,12 @@ COPY --from=build /out/ /
 
 COPY postfix/master.cf /etc/postfix/master.cf
 COPY postfix/sasl-smtpd.conf /etc/postfix/sasl/smtpd.conf
-COPY postfix/main.cf.tmpl postfix/outbound-graph.cf postfix/outbound-smtp.cf \
-     postfix/sasl-xoauth2.conf.tmpl /usr/local/share/postfix-relay/
-COPY scripts/entrypoint.sh scripts/token-refresher.sh scripts/fetch-token.sh scripts/graph-send.sh /usr/local/bin/
+COPY postfix/main.cf.tmpl /usr/local/share/postfix-relay/
+COPY scripts/entrypoint.sh scripts/token-refresher.sh scripts/fetch-token.sh \
+     scripts/graph-send.sh scripts/outbound-graph.sh scripts/outbound-smtp.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/token-refresher.sh \
-        /usr/local/bin/fetch-token.sh /usr/local/bin/graph-send.sh
+        /usr/local/bin/fetch-token.sh /usr/local/bin/graph-send.sh \
+        /usr/local/bin/outbound-graph.sh /usr/local/bin/outbound-smtp.sh
 
 EXPOSE 25 587
 

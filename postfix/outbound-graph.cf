@@ -1,7 +1,0 @@
-# OUTBOUND_MODE=graph: deliver via the Graph sendMail API (pipe transport).
-# The fixed "graph" nexthop makes all recipients of a message one queue
-# destination, so a message is delivered in a single pipe call / Graph request
-# (multiple calls would duplicate delivery to the MIME header recipients).
-default_transport = graph:graph
-graph_destination_recipient_limit = 1000
-graph_destination_concurrency_limit = 5

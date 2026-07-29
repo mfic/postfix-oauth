@@ -110,9 +110,10 @@ The From/sender address on the printer must be one of `config/allowed_senders`.
 | `config/allowed_senders` | Sender whitelist (one address per line) — **required** |
 | `config/printer_accounts` | Optional `user password` lines for SASL accounts |
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise) |
-| `postfix/main.cf.tmpl` + `postfix/outbound-{graph,smtp}.cf`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
+| `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
+| `scripts/outbound-graph.sh` / `scripts/outbound-smtp.sh` | Outbound-mode adapters: each owns its mode's Postfix config, aux services, OAuth scope, and token store |
 | `scripts/graph-send.sh` | graph mode pipe transport: posts one queued message to Graph `sendMail` |
-| `scripts/fetch-token.sh` | One-shot Entra ID token fetch (used at startup and by the refresher loop) |
+| `scripts/fetch-token.sh` | One-shot Entra ID token fetch; hands the token to the mode adapter (used at startup and by the refresher loop) |
 
 Config changes are applied by `docker compose -f <file> restart` (everything
 is rendered at container start).
@@ -143,6 +144,8 @@ is rendered at container start).
 
 - `./test/graph-send.test.sh` — unit tests for the Graph delivery script
   against a local mock endpoint (needs bash, curl, python3).
+- `./test/smtp-dialogue.sh` — response-driven SMTP driver used by the smoke
+  test (each command is sent when the previous reply completes; no sleeps).
 - `./test/smoke.sh` — boots an isolated stack per outbound mode (mock
   Entra/Graph endpoints, fixture config) and replays SMTP dialogues against
   ports 25/587: sender whitelist enforcement (also for authenticated
