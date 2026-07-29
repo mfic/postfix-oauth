@@ -8,6 +8,15 @@ export POSTFIX_HOSTNAME="${POSTFIX_HOSTNAME:-mailrelay.local}"
 export POSTFIX_DOMAIN="${POSTFIX_HOSTNAME#*.}"
 export PRINTER_NETWORKS="${PRINTER_NETWORKS:-}"
 
+# outbound variant: graph (Graph Mail.Send, default) or smtp (SMTP XOAUTH2)
+OUTBOUND_MODE="${OUTBOUND_MODE:-graph}"
+case "$OUTBOUND_MODE" in
+    graph) ;;
+    smtp) : "${RELAY_MAILBOX:?RELAY_MAILBOX is required in smtp mode (the M365 mailbox Postfix authenticates as)}" ;;
+    *) echo "FATAL: OUTBOUND_MODE must be 'graph' or 'smtp', got '$OUTBOUND_MODE'" >&2; exit 1 ;;
+esac
+echo "Outbound mode: $OUTBOUND_MODE"
+
 TEMPLATES=/usr/local/share/postfix-relay
 
 # ---------------------------------------------------------------- TLS cert
@@ -49,14 +58,37 @@ fi
 # ------------------------------------------------- render config templates
 envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${PRINTER_NETWORKS}' \
     < "$TEMPLATES/main.cf.tmpl" > /etc/postfix/main.cf
+cat "$TEMPLATES/outbound-${OUTBOUND_MODE}.cf" >> /etc/postfix/main.cf
 
-# Postfix scrubs the environment of pipe(8) commands, so graph-send.sh reads
-# its settings from this file (GRAPH_ENDPOINT is overridable for tests).
-mkdir -p /etc/tokens /etc/postfix-relay
-cat > /etc/postfix-relay/graph-send.env <<EOF
+mkdir -p /etc/tokens
+if [ "$OUTBOUND_MODE" = smtp ]; then
+    # syslog to container stdout (sasl-xoauth2 logs failures via syslog)
+    busybox syslogd -n -O /proc/1/fd/1 &
+
+    envsubst '${TENANT_ID} ${CLIENT_ID} ${CLIENT_SECRET}' \
+        < "$TEMPLATES/sasl-xoauth2.conf.tmpl" > /etc/sasl-xoauth2.conf
+    chmod 600 /etc/sasl-xoauth2.conf
+
+    cat > /etc/postfix/sasl_passwd <<EOF
+[smtp.office365.com]:587 ${RELAY_MAILBOX}:/etc/tokens/token
+EOF
+    chmod 600 /etc/postfix/sasl_passwd
+    postmap hash:/etc/postfix/sasl_passwd
+
+    export TOKEN_SCOPE=https://outlook.office365.com/.default
+    export TOKEN_FORMAT=sasl-xoauth2
+else
+    # Postfix scrubs the environment of pipe(8) commands, so graph-send.sh
+    # reads its settings from this file (GRAPH_ENDPOINT overridable for tests).
+    mkdir -p /etc/postfix-relay
+    cat > /etc/postfix-relay/graph-send.env <<EOF
 GRAPH_ENDPOINT=${GRAPH_ENDPOINT:-https://graph.microsoft.com/v1.0}
 TOKEN_FILE=/etc/tokens/token
 EOF
+
+    export TOKEN_SCOPE=https://graph.microsoft.com/.default
+    export TOKEN_FORMAT=raw
+fi
 
 # fix up the spool volume ownership on first run, then lint the rendered config
 postfix set-permissions >/dev/null 2>&1 || true

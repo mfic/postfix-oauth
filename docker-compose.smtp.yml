@@ -1,3 +1,7 @@
+# Outbound via SMTP submission with XOAUTH2 (SMTP.SendAsApp):
+#   docker compose -f docker-compose.smtp.yml up -d --build
+# Requires RELAY_MAILBOX in .env and the Exchange service-principal setup
+# described in the README.
 services:
   postfix:
     build: .
@@ -5,6 +9,8 @@ services:
     hostname: ${POSTFIX_HOSTNAME:-mailrelay.local}
     restart: unless-stopped
     env_file: .env
+    environment:
+      OUTBOUND_MODE: smtp
     ports:
       - "25:25"     # plain SMTP for IP-whitelisted printers
       - "587:587"   # submission (STARTTLS) for printers using username/password
