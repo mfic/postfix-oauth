@@ -1,0 +1,6 @@
+# Optional per-printer SMTP AUTH accounts: "username password" per line.
+# Printers using these log in on port 587 (or 25) with PLAIN/LOGIN.
+# Copy to config/printer_accounts and edit. Delete/leave empty to disable auth
+# accounts entirely (then only PRINTER_NETWORKS IPs may relay).
+printer-lobby  ChangeMe-Str0ng!
+printer-hr     An0ther-Secret!

@@ -1,0 +1,22 @@
+services:
+  postfix:
+    build: .
+    container_name: postfix-m365-relay
+    hostname: ${POSTFIX_HOSTNAME:-mailrelay.local}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "25:25"     # plain SMTP for IP-whitelisted printers
+      - "587:587"   # submission (STARTTLS) for printers using username/password
+    volumes:
+      - ./config:/config:ro
+      - postfix-spool:/var/spool/postfix
+    healthcheck:
+      test: ["CMD-SHELL", "printf 'QUIT\r\n' | nc -w 3 127.0.0.1 25 | grep -q ^220"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  postfix-spool:

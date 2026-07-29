@@ -1,0 +1,4 @@
+.env
+config/allowed_senders
+config/printer_accounts
+config/tls/
