@@ -1,0 +1,5 @@
+# Allowed From/envelope-sender addresses - one per line.
+# Any MAIL FROM not on this list is rejected with 550, no matter who sends it.
+# Copy to config/allowed_senders and edit.
+printers@example.com
+scanner@example.com
