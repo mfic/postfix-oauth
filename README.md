@@ -167,8 +167,11 @@ is rendered at container start).
 - **`renovate.json`** — Renovate watches the container images, the GitHub
   Actions, and the `SASL_XOAUTH2_VERSION` build arg, and files PRs. The Debian
   base image is deliberately excluded: moving to the next Debian release is a
-  decision, not a routine bump. Renovate needs its GitHub App installed on the
-  repository; it then keeps a Dependency Dashboard issue up to date.
+  decision, not a routine bump. `ignorePaths` is overridden because
+  `config:recommended` skips `**/test/**` by default, and `test/compose.*.yml`
+  is the only place this repo pins an image (`python:3-alpine`). Renovate needs
+  its GitHub App installed on the repository; it then keeps a Dependency
+  Dashboard issue up to date.
 
 ## Troubleshooting
 
