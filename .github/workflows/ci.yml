@@ -10,9 +10,6 @@ jobs:
   lint:
     name: shellcheck
     runs-on: ubuntu-latest
-    # Advisory until the scripts are known green - drop this line to make
-    # shellcheck warnings block a merge.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Lint shell scripts

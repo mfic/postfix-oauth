@@ -157,8 +157,8 @@ is rendered at container start).
 
 ### Continuous checks
 
-- **`.github/workflows/ci.yml`** — runs both test scripts (plus an advisory
-  shellcheck pass) on every push to `main` and every pull request.
+- **`.github/workflows/ci.yml`** — runs shellcheck and both test scripts on
+  every push to `main` and every pull request.
 - **`.github/workflows/upstream-drift.yml`** — weekly, and on demand: rebuilds
   the image with `--no-cache --pull` and runs the same tests. The repo does not
   change between runs, so a failure means the *outside* moved — a new

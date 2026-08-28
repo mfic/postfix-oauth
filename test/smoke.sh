@@ -8,7 +8,7 @@
 #
 #   ./test/smoke.sh
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 RELAY=postfix-oauth-test-relay
 MOCK=postfix-oauth-test-mockgraph
