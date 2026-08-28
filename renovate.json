@@ -5,13 +5,7 @@
   "schedule": ["before 6am on monday"],
   "dependencyDashboard": true,
   "labels": ["dependencies"],
-  "docker-compose": {
-    "description": "The default pattern misses the test stacks, which are the only compose files that pin an image (python:3-alpine).",
-    "managerFilePatterns": [
-      "/(^|/)(?:docker-)?compose[^/]*\\.ya?ml$/",
-      "/^test/compose\\..*\\.test\\.yml$/"
-    ]
-  },
+  "ignorePaths": ["**/node_modules/**", "**/bower_components/**", "**/vendor/**"],
   "packageRules": [
     {
       "description": "debian:trixie-slim is pinned to a release codename on purpose - a jump to the next Debian release is a deliberate decision, not a routine update.",
