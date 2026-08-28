@@ -1,0 +1,60 @@
+name: Upstream drift check
+
+# Nothing in this repo changes between runs - this job re-builds the image from
+# scratch (no layer cache) so it picks up whatever debian:trixie-slim and the
+# Debian archive serve *today*, then runs the full test suite against it.
+# A red run means the outside world moved and the relay needs attention.
+
+on:
+  schedule:
+    - cron: "17 4 * * 1" # Mondays 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  rebuild:
+    name: rebuild from scratch & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image without cache
+        run: |
+          docker compose -p postfix-oauth-test-graph \
+            -f test/compose.graph.test.yml build --no-cache --pull
+
+      - name: Unit tests (graph-send)
+        run: ./test/graph-send.test.sh
+
+      - name: Smoke test (both outbound modes)
+        run: ./test/smoke.sh
+
+  report:
+    name: report failure
+    needs: rebuild
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Upstream drift: scheduled rebuild of main is failing"
+          existing=$(gh issue list --state open --label upstream-drift \
+              --search "$title in:title" --json number --jq '.[0].number')
+          body=$(printf '%s\n\n%s\n' \
+            "The weekly from-scratch rebuild of \`main\` failed. Nothing in the repo changed, so the cause is upstream (base image, Debian packages, sasl-xoauth2, or Microsoft's endpoints)." \
+            "Failing run: $RUN_URL")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh label create upstream-drift --color d93f0b \
+              --description "Scheduled rebuild caught an upstream change" 2>/dev/null || true
+            gh issue create --title "$title" --label upstream-drift --body "$body"
+          fi
