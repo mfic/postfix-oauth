@@ -5,7 +5,7 @@
 #
 #   ./test/graph-send.test.sh
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 PORT=18321
 TMP=$(mktemp -d)

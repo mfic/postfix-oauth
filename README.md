@@ -155,6 +155,21 @@ is rendered at container start).
   `smtp.office365.com` leg of smtp mode needs real credentials and is not
   covered.
 
+### Continuous checks
+
+- **`.github/workflows/ci.yml`** — runs shellcheck and both test scripts on
+  every push to `main` and every pull request.
+- **`.github/workflows/upstream-drift.yml`** — weekly, and on demand: rebuilds
+  the image with `--no-cache --pull` and runs the same tests. The repo does not
+  change between runs, so a failure means the *outside* moved — a new
+  `debian:trixie-slim`, a changed Debian package, sasl-xoauth2, or Microsoft.
+  A failing run opens (or comments on) an `upstream-drift` issue.
+- **`renovate.json`** — Renovate watches the container images, the GitHub
+  Actions, and the `SASL_XOAUTH2_VERSION` build arg, and files PRs. The Debian
+  base image is deliberately excluded: moving to the next Debian release is a
+  decision, not a routine bump. Renovate needs its GitHub App installed on the
+  repository; it then keeps a Dependency Dashboard issue up to date.
+
 ## Troubleshooting
 
 ```bash
