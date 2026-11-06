@@ -240,11 +240,6 @@ Everything is rendered at container start. Changes in `config/` are applied by
 `docker compose restart`. Changes in `.env` need `docker compose up -d`, because
 Docker only reads that file when it creates the container.
 
-`PRINTER_NETWORKS` in `.env`, the older form of `config/trusted_networks`, still
-works, and entries from both count. It is not validated, so prefer the file.
-`config/printer_accounts`, the older name of `config/client_accounts`, also still
-works, and accounts from both count. If a username is in both, `client_accounts`
-wins.
 
 ## Delivery semantics (graph mode)
 

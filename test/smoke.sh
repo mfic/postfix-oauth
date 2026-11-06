@@ -200,20 +200,15 @@ cleanup
 # ---------------------------------------------- graph mode, trusted networks
 # fixtures-trusted lists Docker's default address pools, so the "remote" helper
 # counts as trusted. Runs in one mode: the setting has nothing mode-specific.
-export PRINTER_NETWORKS=198.51.100.0/24
 boot_stack graph fixtures-trusted
-unset PRINTER_NETWORKS
 
 out=$(smtp_dialogue remote 25 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@example.org>')
 check "client in trusted_networks relays without auth" '250 2\.1\.5' "$out"
 out=$(smtp_dialogue remote 25 'MAIL FROM:<evil@nowhere.com>' 'RCPT TO:<user@example.org>')
 check "trusted network stays bound by the whitelist" '554 5\.7\.1 .*Sender address rejected' "$out"
-out=$(smtp_dialogue remote 587 "AUTH PLAIN $(auth_plain printer-test)")
-check "older printer_accounts file still counts" '235 2\.7\.0' "$out"
 out=$(docker exec "$RELAY" postconf -h mynetworks)
 check "IPv6 entry is written in brackets" '\[2001:db8::\]/32' "$out"
-check "older PRINTER_NETWORKS still counts" '198\.51\.100\.0/24' "$out"
-check "boot log counts file and PRINTER_NETWORKS entries" 'Loaded 6 trusted network\(s\)' "$(docker logs "$RELAY" 2>&1)"
+check "boot log counts the trusted networks" 'Loaded 5 trusted network\(s\)' "$(docker logs "$RELAY" 2>&1)"
 if printf '%s\n' "$out" | grep -q 'printer\|#'; then
     check "comments stay out of mynetworks" 'absent' 'present'
 else
