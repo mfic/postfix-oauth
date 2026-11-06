@@ -175,6 +175,49 @@ run_send MAILER-DAEMON printers@example.com
 check "notice is reported even without a token" "69" "$(cat "$TMP/exit")"
 printf '%s' "test-token-123" > "$TMP/token"
 
+# --- with a configured mailbox, a bounce goes there as the configured sender --
+run_notice() { # run_notice <sender>
+    MIME=$'From: MAILER-DAEMON@relay (Mail Delivery System)\r\nTo: printers@example.com\r\nSubject: Undelivered\r\n\r\nTo: body line\r\nX-Postfix-Queue-ID: ABC123\r\nFinal-Recipient: rfc822; user@example.org\r\n'
+    printf '%s' "$MIME" | \
+        TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
+        FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com \
+        bash scripts/graph-send.sh "$1" printers@example.com 2>"$TMP/stderr"
+    echo "$?" > "$TMP/exit"
+}
+run_notice MAILER-DAEMON
+check "bounce with a configured mailbox exits 0" "0" "$(cat "$TMP/exit")"
+check "bounce is sent as the configured sender" \
+    "/v1.0/users/noreply@example.com/sendMail" "$(req_field path)"
+req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
+check "bounce gets the configured sender in From" "From: noreply@example.com" \
+    "$(grep -i '^From:' "$TMP/decoded" | tr -d '\r')"
+check "bounce goes only to the configured mailbox" $'To: notices@example.com\nTo: body line' \
+    "$(grep -i '^To:' "$TMP/decoded" | tr -d '\r')"
+if grep -qi '^Bcc:' "$TMP/decoded"; then
+    echo "FAIL: original sender is not added as Bcc"; fail=$((fail+1))
+else
+    echo "PASS: original sender is not added as Bcc"; pass=$((pass+1))
+fi
+
+echo 403 > "$TMP/status"
+run_notice MAILER-DAEMON
+check "refused notice exits 69" "69" "$(cat "$TMP/exit")"
+if grep -q 'FAILURE NOTICE NOT SENT to notices@example.com.*ABC123.*HTTP 403' "$TMP/stderr"; then
+    echo "PASS: refused notice is logged with what failed"; pass=$((pass+1))
+else
+    echo "FAIL: refused notice is logged with what failed: $(cat "$TMP/stderr")"; fail=$((fail+1))
+fi
+echo 503 > "$TMP/status"
+run_notice MAILER-DAEMON
+check "notice is retried during a Graph outage" "75" "$(cat "$TMP/exit")"
+echo 202 > "$TMP/status"
+
+before=$(grep -c sendMail "$TMP/requests.jsonl")
+run_notice double-bounce@relay.example.com
+check "postmaster notice is never mailed" "$before" "$(grep -c sendMail "$TMP/requests.jsonl")"
+check "postmaster notice exits 69" "69" "$(cat "$TMP/exit")"
+MIME=$'From: printers@example.com\r\nTo: user@example.org\r\nSubject: scan\r\n\r\nhello scan\r\n'
+
 # --- graph-size-test.sh reports what Graph accepts --------------------------
 printf '#!/bin/bash\nexec bash scripts/graph-send.sh "$@"\n' > "$TMP/graph-send"
 chmod +x "$TMP/graph-send"

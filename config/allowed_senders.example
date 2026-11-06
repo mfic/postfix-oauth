@@ -1,5 +1,6 @@
 # Allowed From/envelope-sender addresses - one per line.
-# Any MAIL FROM not on this list is rejected with 550, no matter who sends it.
+# Any MAIL FROM not on this list is rejected with 554, trusted IP or not. A client
+# listed in client_senders is the exception: its sender is replaced by its mailbox.
 # Copy to config/allowed_senders and edit.
 printers@example.com
 scanner@example.com

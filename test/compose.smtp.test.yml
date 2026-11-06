@@ -12,6 +12,8 @@ services:
       OUTBOUND_MODE: smtp
       RELAY_MAILBOX: printers@example.com
       TOKEN_ENDPOINT: http://mockgraph:8080/token
+      FAILURE_NOTICE_MAILBOX: ${FAILURE_NOTICE_MAILBOX:-}
+      FAILURE_NOTICE_SENDER: ${FAILURE_NOTICE_SENDER:-}
     volumes:
       - ${FIXTURES:-./fixtures}:/config:ro
     depends_on:

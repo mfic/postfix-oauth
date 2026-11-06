@@ -7,7 +7,8 @@ Every POST is appended to <statedir>/requests.jsonl as one JSON object
 (path, authorization, content-type, body). POSTs to */token get a static
 client-credentials token response; for everything else the response status
 is read from <statedir>/status (default 202) on each request, so tests can
-flip it without restarting the server. A body larger than the byte count in
+flip it without restarting the server. <statedir>/status_once does the same
+for one request only. A body larger than the byte count in
 <statedir>/max_body gets a 413, and is not evidence of Microsoft's real limit.
 Responds 200 to GET /health.
 """
@@ -49,6 +50,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with open(os.path.join(STATEDIR, "status")) as f:
                 status = int(f.read().strip())
+        except (OSError, ValueError):
+            pass
+        try:
+            once = os.path.join(STATEDIR, "status_once")
+            with open(once) as f:
+                status = int(f.read().strip())
+            os.remove(once)
         except (OSError, ValueError):
             pass
         try:

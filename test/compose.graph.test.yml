@@ -11,6 +11,8 @@ services:
       PRINTER_NETWORKS: ""
       OUTBOUND_MODE: graph
       TOKEN_ENDPOINT: http://mockgraph:8080/token
+      FAILURE_NOTICE_MAILBOX: ${FAILURE_NOTICE_MAILBOX:-}
+      FAILURE_NOTICE_SENDER: ${FAILURE_NOTICE_SENDER:-}
       GRAPH_ENDPOINT: http://mockgraph:8080/v1.0
     volumes:
       - ${FIXTURES:-./fixtures}:/config:ro

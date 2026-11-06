@@ -24,12 +24,25 @@ graph_destination_recipient_limit = 1000
 graph_destination_concurrency_limit = 5
 EOF
 
+    # A half-configured or malformed setting would only show up when a message
+    # fails, so stop now. The values also end up in a file graph-send.sh sources.
+    mailbox_pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
+    for value in "${FAILURE_NOTICE_MAILBOX:-}" "${FAILURE_NOTICE_SENDER:-}"; do
+        if [ -n "${FAILURE_NOTICE_MAILBOX:-}${FAILURE_NOTICE_SENDER:-}" ] \
+            && ! [[ "$value" =~ $mailbox_pattern ]]; then
+            echo "FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together, as mailbox addresses" >&2
+            exit 1
+        fi
+    done
+
     # Postfix scrubs the environment of pipe(8) commands, so graph-send.sh
     # reads its settings from this file.
     mkdir -p /etc/postfix-relay
     cat > /etc/postfix-relay/graph-send.env <<EOF
 GRAPH_ENDPOINT=${GRAPH_ENDPOINT:-https://graph.microsoft.com/v1.0}
 TOKEN_FILE=${TOKEN_FILE}
+FAILURE_NOTICE_MAILBOX=${FAILURE_NOTICE_MAILBOX:-}
+FAILURE_NOTICE_SENDER=${FAILURE_NOTICE_SENDER:-}
 EOF
     ;;
 

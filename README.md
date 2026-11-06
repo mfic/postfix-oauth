@@ -8,12 +8,13 @@ support** send mail through Microsoft 365. Printers connect either
 
 **Sender lockdown:** only envelope senders listed in `config/allowed_senders`
 are accepted — for every client, whitelisted or authenticated. Anything else is
-rejected with `550`. So printers can *choose* a sender, but only from the
+rejected with `554`. So printers can *choose* a sender, but only from the
 predefined list.
 
 **Per-client mailboxes (optional):** a printer listed in
 `config/client_senders`, by source IP or SASL account, always sends as its own
-mailbox, whatever it has configured. See [step 3a](#3a-optional-give-a-printer-its-own-mailbox).
+mailbox, whatever it has configured. Its MAIL FROM is not checked against the
+list, because it is replaced by that mailbox. See [step 3a](#3a-optional-give-a-printer-its-own-mailbox).
 
 ## Two outbound modes, one image
 
@@ -248,46 +249,59 @@ is rendered at container start).
 
 ### Large scans
 
-The relay accepts messages up to 50 MB, but Graph may refuse far less. Microsoft
-documents a 4 MB limit on Graph write requests; whether and how it applies to
-`sendMail` is **not yet tested against a real tenant**. Encoding matters here: a
-scan is base64-encoded in the MIME message, and the whole message is encoded
-again for Graph, so the request is about 1.8x the scan. If 4 MB applies, the
-largest scan is about 2.2 MB, not 3 MB.
+The relay accepts messages up to 50 MB. In a live test on one tenant (November
+2026), Graph accepted and delivered attachments of 1, 2, 3, 5 and 10 MB. The 10 MB
+one was a 19 MB request, so Microsoft's documented 4 MB limit on Graph write
+requests did not apply to `sendMail` there. **The actual ceiling is unknown:**
+nothing above 10 MB has been tested, and other tenants or receiving mail systems
+may differ. A scan is base64-encoded in the MIME message, and the whole message is
+encoded again for Graph, so the request is about 1.8x the scan.
 
 A rejected message fails instead of retrying, and is logged with its size. A
 `413` is logged as `graph-send: MESSAGE TOO LARGE`, with the message and request
-sizes. Any other rejection also includes the sizes.
+sizes. Any other rejection also includes the sizes. Microsoft has not yet been
+seen refusing a message for its size, so the status code it uses is unconfirmed.
 
-To find the real limit, send test mails (real ones, to a mailbox you can check):
+To check other sizes, send test mails (real ones, to a mailbox you can check):
 
 ```bash
 docker compose -f docker-compose.graph.yml exec postfix \
-    graph-size-test.sh printers@example.com you@example.com 3 5 10   # attachment MB
+    graph-size-test.sh printers@example.com you@example.com 10 20 30   # attachment MB
 ```
 
 ## Failure notices
 
-Postfix would normally mail a failure notice to the sender of a failed message.
-**That does not work in graph mode**: a notice has no sender mailbox, so Graph
-cannot send it, and nobody is told. The relay therefore doesn't try, and logs the
-loss instead. Failures are only visible in the log, so watch it:
+The printer never learns of a failure once the relay has accepted the message, so
+failures need somewhere to go. In graph mode, set both of these in `.env`:
 
 ```bash
-docker compose -f docker-compose.graph.yml logs postfix | grep -E 'status=bounced|FAILURE NOTICE'
+FAILURE_NOTICE_MAILBOX=it@example.com         # receives the notices
+FAILURE_NOTICE_SENDER=no-reply@example.com    # sends them
 ```
 
-Each lost notice is logged as `graph-send: FAILURE NOTICE NOT SENT`, with the
-original message's queue ID and the failed recipients. The printer itself never
-learns of the failure once the relay has accepted the message.
+- The sender must be a mailbox in the app's scope (step 2a). It doesn't need to be
+  in `allowed_senders`. The recipient can be any address.
+- A notice contains the failure reason, the failed message's headers, and up to
+  50 KB of its content, which may include part of a scan. Choose the recipient with
+  that in mind.
+- Without these settings, or if a notice itself is refused, the only record is the
+  log. Each such notice is logged as `graph-send: FAILURE NOTICE NOT SENT`, with the
+  original message's queue ID and the failed recipients:
 
-smtp mode has no such handling. Notices go to Microsoft with an empty sender
+```bash
+docker compose logs postfix | grep -E 'status=bounced|FAILURE NOTICE'
+```
+
+Postfix's notices to the postmaster are only ever logged, because their SMTP
+transcript can contain printer credentials.
+
+smtp mode ignores these settings. Notices go to Microsoft with an empty sender
 through the relay mailbox, and whether Microsoft accepts them is **not yet tested**.
 
 ## Security notes
 
 - The relay accepts mail **only** from `PRINTER_NETWORKS` IPs or authenticated
-  clients, and **only** with whitelisted senders — it is not an open relay,
+  clients, and **only** with whitelisted or mapped senders — it is not an open relay,
   but still: run it on an internal network, don't expose port 25 to the internet.
 - Auth on port 25/587 permits plaintext passwords because most printers can't
   do STARTTLS; treat printer passwords accordingly (LAN-only).
@@ -295,9 +309,11 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   `Mail.Send` consent or an unscoped role assignment. Follow step 2a and check
   it with `Test-ServicePrincipalAuthorization`.
 - The relay checks only the **envelope** sender, so a printer without a mapped
-  mailbox can put any address in the **From header**. How Microsoft treats a From
-  that differs from the sending mailbox is **not yet tested**. Clients with a
-  mapped mailbox (step 3a) are not affected, because their From is overwritten.
+  mailbox can put any address in the **From header**. In a live test in graph mode,
+  Microsoft refused a From outside the app's scope with a `403`, and the message
+  failed. A From naming a second mailbox **inside** the scope is **not yet tested**.
+  Clients with a mapped mailbox (step 3a) are not affected, because their From is
+  overwritten.
 - smtp mode: Microsoft is retiring Basic Auth for SMTP submission through
   2026; XOAUTH2 as used here is the supported replacement path.
 
@@ -322,13 +338,17 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
 All of this runs against mocks. It proves what the relay sends, not what
 Microsoft does with it. **Not yet proven against a real tenant:**
 
-- a real send under RBAC for Applications with no Entra `Mail.Send` consent, and
-  that a mailbox outside the scope is refused
-- the Graph size limit for `sendMail`, and the status code it returns
-- how Microsoft treats a From that differs from the sending mailbox
-- real delivery as a mapped mailbox
+- attachments above 10 MB, and the status code Graph uses to refuse by size
+- a From naming a second mailbox inside the app's scope
+- a real printer as the client
+- a real failure notice reaching `FAILURE_NOTICE_MAILBOX`
 - all of smtp mode's connection to `smtp.office365.com`, including SendAs and
   failure notices
+
+Tested live once in graph mode, on one tenant (November 2026): a send under RBAC for
+Applications with no Entra `Mail.Send` consent, refusal of a sender outside the
+scope, attachments up to 10 MB, refusal of a From outside the scope, and delivery as
+a mapped mailbox.
 
 ### Continuous checks
 
@@ -359,8 +379,9 @@ graph mode:
 
 - `graph-send: HTTP 401 ... bouncing` → token rejected: admin consent missing
   or wrong tenant/client/secret.
-- `graph-send: HTTP 403 ErrorAccessDenied` → sender mailbox not in the scope
-  or no `Application Mail.Send` role assignment (step 2a). Check with
+- `graph-send: HTTP 403 ErrorAccessDenied` → the sender mailbox, or the address
+  in the message's From header, is not in the scope, or there is no
+  `Application Mail.Send` role assignment (step 2a). Check with
   `Test-ServicePrincipalAuthorization -Identity <CLIENT_ID> -Resource <mailbox>`;
   a recent change can take up to 2 hours to reach the relay.
 - `graph-send: MESSAGE TOO LARGE` → see [Large scans](#large-scans).
@@ -379,7 +400,7 @@ smtp mode:
 
 both modes:
 
-- `550 ... Access denied` at MAIL FROM on the relay → sender not in
+- `554 ... Sender address rejected: Access denied` on the relay → sender not in
   `config/allowed_senders`.
 - `FATAL: /config/client_senders: ...` at startup → fix the named line (step 3a).
 - `554 5.5.0 Error: SMTP protocol synchronization` → the client sent before the

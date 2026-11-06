@@ -127,15 +127,20 @@ mapped_policy_suite() {
 
 # A bad config line must stop the relay: skipped, it would let the client choose
 # its own sender. Runs the entrypoint only, so no stack needs to be up.
+run_entrypoint() {
+    timeout 180 docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml \
+        run --build -T --rm --no-deps relay 2>&1
+}
 bad_config_suite() {
     local name expected out
     for name in bad-mailbox:'not in allowed_senders' bad-account:'not in printer_accounts' bad-ip:'invalid IP entry'; do
         expected=${name#*:}
-        out=$(FIXTURES="./fixtures-${name%%:*}" docker compose -p postfix-oauth-test-bad \
-            -f test/compose.graph.test.yml run -T --rm --no-deps relay 2>&1)
+        out=$(FIXTURES="./fixtures-${name%%:*}" run_entrypoint)
         check "boot refuses ${name%%:*}" "FATAL: /config/client_senders: .*$expected" "$out"
     done
-    docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v >/dev/null 2>&1
+    out=$(FIXTURES=./fixtures FAILURE_NOTICE_MAILBOX=notices@example.com run_entrypoint)
+    check "boot refuses a notice mailbox without a sender" 'FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together' "$out"
+    docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v --remove-orphans >/dev/null 2>&1
 }
 
 # --------------------------------------------------------------- graph mode
@@ -188,6 +193,7 @@ cleanup
 
 # ------------------------------------------------ graph mode, mapped mailboxes
 bad_config_suite
+export FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com
 boot_stack graph fixtures-mapped
 mapped_policy_suite
 
@@ -245,7 +251,19 @@ wait_sendmail 1
 sleep 2
 check "a message for 60 recipients stays one Graph request" '^1$' "$(sendmail_requests | wc -l)"
 
+# a real Postfix bounce reaches the configured mailbox through the pipe transport
+reset_requests
+docker exec "$MOCK" sh -c 'echo 403 > /state/status_once'
+smtp_dialogue local 25 'MAIL FROM:<wrong@nowhere.com>' 'RCPT TO:<user@example.org>' \
+    'DATA' 'From: wrong@nowhere.com' 'To: user@example.org' 'Subject: fails' '' 'x' '.' >/dev/null
+wait_sendmail 2
+sent=$(sendmail_requests | tail -1)
+decoded=$(printf '%s' "$sent" | decoded_body)
+check "failure notice is sent as the configured sender" '/v1.0/users/noreply@example.com/sendMail' "$sent"
+check "failure notice goes to the configured mailbox" '^To: notices@example\.com' "$decoded"
+
 cleanup
+unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER
 
 # ---------------------------------------------------------------- smtp mode
 boot_stack smtp

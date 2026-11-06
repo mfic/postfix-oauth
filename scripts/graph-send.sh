@@ -18,21 +18,43 @@ shift
 
 msg=$(mktemp)
 response=$(mktemp)
-trap 'rm -f "$msg" "$msg.bcc" "$response"' EXIT
+trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$response"' EXIT
 cat > "$msg"
 
 # Postfix's own notices have no mailbox to send from: bounces arrive with the
 # null sender, which pipe(8) expands to MAILER-DAEMON, and postmaster notices
-# with double_bounce_sender. Posting them would only fail at Graph, so report
-# them instead. pipe(8) logs command output only on failure, hence exit 69;
-# Postfix discards an undeliverable notice without generating another one.
+# with double_bounce_sender. A bounce goes to FAILURE_NOTICE_MAILBOX, sent as
+# FAILURE_NOTICE_SENDER, if those are set. Everything else is only logged, since
+# posting it would just fail at Graph; postmaster notices can quote printer
+# credentials from the SMTP transcript, so they are never mailed. pipe(8) logs
+# command output only on failure, hence exit 69; Postfix discards an
+# undeliverable notice without generating another one.
+log_prefix=""
 case "$sender" in
     MAILER-DAEMON|double-bounce@*)
         failed=$(sed -n 's/^Final-Recipient: *rfc822; *//Ip' "$msg" | tr -d '\r' | paste -sd, -)
         original=$(sed -n 's/^X-Postfix-Queue-ID: *//Ip' "$msg" | tr -d '\r' | head -n 1)
-        echo "graph-send: FAILURE NOTICE NOT SENT to $* (no mailbox to send it from):" \
-            "original message ${original:-unknown}, failed recipients ${failed:-unknown}" >&2
-        exit 69 ;;
+        details="original message ${original:-unknown}, failed recipients ${failed:-unknown}"
+        if [ "$sender" != MAILER-DAEMON ] || [ -z "${FAILURE_NOTICE_MAILBOX:-}" ]; then
+            echo "graph-send: FAILURE NOTICE NOT SENT to $* (no mailbox to send it from): $details" >&2
+            exit 69
+        fi
+        log_prefix="FAILURE NOTICE NOT SENT to $FAILURE_NOTICE_MAILBOX ($details): "
+        sender=$FAILURE_NOTICE_SENDER
+        set -- "$FAILURE_NOTICE_MAILBOX"
+        # Graph takes the sender and recipients from the MIME headers
+        awk -v from="$sender" -v to="$1" '
+            in_body { print; next }
+            /^\r?$/ { in_body = 1; print; next }
+            /^[ \t]/ { if (!skip) print; next }
+            {
+                skip = 0
+                name = tolower($0)
+                if (name ~ /^from:/) { print "From: " from; skip = 1; next }
+                if (name ~ /^to:/) { print "To: " to; skip = 1; next }
+                print
+            }' "$msg" > "$msg.notice"
+        mv -f "$msg.notice" "$msg" ;;
 esac
 
 if ! token=$(cat "$TOKEN_FILE" 2>/dev/null) || [ -z "$token" ]; then
@@ -77,12 +99,12 @@ status=$(base64 -w0 < "$msg" | curl -s -o "$response" -w '%{http_code}' -X POST 
 sizes="message $(wc -c < "$msg") bytes, request $(base64 -w0 < "$msg" | wc -c) bytes"
 case "$status" in
     000|429|5*)
-        echo "graph-send: HTTP $status from Graph, deferring ($sizes): $(cat "$response")" >&2
+        echo "graph-send: ${log_prefix}HTTP $status from Graph, deferring ($sizes): $(cat "$response")" >&2
         exit 75 ;;
     413)
-        echo "graph-send: MESSAGE TOO LARGE for Graph sendMail, HTTP 413, bouncing ($sizes): $(cat "$response")" >&2
+        echo "graph-send: ${log_prefix}MESSAGE TOO LARGE for Graph sendMail, HTTP 413, bouncing ($sizes): $(cat "$response")" >&2
         exit 69 ;;
     *)
-        echo "graph-send: HTTP $status from Graph, bouncing ($sizes): $(cat "$response")" >&2
+        echo "graph-send: ${log_prefix}HTTP $status from Graph, bouncing ($sizes): $(cat "$response")" >&2
         exit 69 ;;
 esac
