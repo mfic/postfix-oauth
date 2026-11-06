@@ -1,0 +1,7 @@
+# Copy to cloudflare.ini next to the compose files, then: chmod 600 cloudflare.ini
+# Only the certbot sidecar mounts this file, so the relay never holds the token.
+# Keep it out of .env, because the relay receives everything in .env.
+#
+# Create the token in Cloudflare with one permission, Zone > DNS > Edit, limited to
+# the zone that contains POSTFIX_HOSTNAME.
+dns_cloudflare_api_token = your-cloudflare-api-token

@@ -4,3 +4,5 @@ config/client_accounts
 config/client_senders
 config/trusted_networks
 config/tls/
+cloudflare.ini
+test/.tls-fixtures/

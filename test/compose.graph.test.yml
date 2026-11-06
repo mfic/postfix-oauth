@@ -14,6 +14,8 @@ services:
       FAILURE_NOTICE_SENDER: ${FAILURE_NOTICE_SENDER:-}
       FAILURE_NOTICE_ATTACH_MESSAGE: ${FAILURE_NOTICE_ATTACH_MESSAGE:-}
       GRAPH_ENDPOINT: http://mockgraph:8080/v1.0
+      TLS_WATCH_SECONDS: ${TLS_WATCH_SECONDS:-}
+      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
     volumes:
       - ${FIXTURES:-./fixtures}:/config:ro
     depends_on:

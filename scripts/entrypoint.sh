@@ -20,16 +20,7 @@ echo "Outbound mode: $OUTBOUND_MODE"
 TEMPLATES=/usr/local/share/postfix-relay
 
 # ---------------------------------------------------------------- TLS cert
-# Self-signed cert for STARTTLS unless one is mounted at /config/tls
-if [ -f /config/tls/cert.pem ] && [ -f /config/tls/key.pem ]; then
-    cp /config/tls/cert.pem /etc/postfix/cert.pem
-    cp /config/tls/key.pem /etc/postfix/key.pem
-elif [ ! -f /etc/postfix/cert.pem ]; then
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -subj "/CN=${POSTFIX_HOSTNAME}" \
-        -keyout /etc/postfix/key.pem -out /etc/postfix/cert.pem 2>/dev/null
-fi
-chmod 600 /etc/postfix/key.pem
+/usr/local/bin/tls-cert.sh install
 
 # ------------------------------------------------------- sender whitelist
 # /config/allowed_senders: one address per line, '#' comments allowed.
@@ -164,5 +155,6 @@ else
     echo "WARNING: inbound mail will queue until the refresher obtains a token." >&2
 fi
 /usr/local/bin/token-refresher.sh "$OUTBOUND_MODE" &
+/usr/local/bin/tls-cert.sh watch &
 
 exec postfix start-fg

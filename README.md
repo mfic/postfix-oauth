@@ -165,11 +165,14 @@ unless the printer has a mapped mailbox (step 3a).
 **TLS** is offered on ports 25 and 587 through STARTTLS, and is optional:
 
 - **Certificate:** the relay uses a self-signed certificate by default, and a
-  printer that checks certificates will refuse it. Put a real one in
+  printer that checks certificates will refuse it. Get a real one through
+  [Let's Encrypt](#4a-optional-a-lets-encrypt-certificate), or put your own in
   `config/tls/cert.pem` and `key.pem`, with a name matching the address the printer
-  connects to. If that isn't possible, import the self-signed certificate on the
-  printer or turn off its certificate check. The certificate is read at startup, so
-  run `docker compose restart` after renewing it.
+  connects to. Don't import the self-signed certificate on a printer: a new one is
+  generated whenever the container is recreated, such as by an update.
+- **Renewing your own certificate:** replace the files in `config/tls/`. The relay
+  loads them within 5 minutes, with no restart. A key that doesn't match its
+  certificate is logged and ignored, and the current certificate stays in use.
 - **Port 465 is not available:** a printer that only offers implicit TLS ("SSL/TLS"
   rather than STARTTLS) can't connect.
 - **Versions:** TLS 1.0 and newer are accepted, because older printers may not
@@ -180,6 +183,64 @@ unless the printer has a mapped mailbox (step 3a).
   ```bash
   docker compose logs | grep 'TLS connection established'
   ```
+
+### 4a. Optional: a Let's Encrypt certificate
+
+A sidecar container obtains the certificate through a Cloudflare DNS challenge and
+renews it. The relay needs no inbound access from the internet, and its name doesn't
+have to resolve publicly. You need:
+
+- `POSTFIX_HOSTNAME` in a public domain whose DNS is on Cloudflare
+- printers that connect by that name, not by IP, so internal DNS must resolve it
+- printers that trust ISRG Root X1, which some older ones don't
+
+Certificates are published in public Certificate Transparency logs, so this makes
+the relay's hostname public. Starting the sidecar also accepts the
+[Let's Encrypt Subscriber Agreement](https://letsencrypt.org/repository/).
+
+1. In Cloudflare, create an API token with one permission, **Zone > DNS > Edit**,
+   limited to the zone containing `POSTFIX_HOSTNAME`.
+2. Store it in `cloudflare.ini`, not in `.env`, because the relay receives everything
+   in `.env`:
+
+   ```bash
+   cp cloudflare.ini.example cloudflare.ini
+   chmod 600 cloudflare.ini
+   # add the token to cloudflare.ini
+   ```
+
+3. Add these lines to `.env` and start the sidecar. Remove `config/tls/` first if you
+   have it, because the relay refuses to start with both. The staging server issues
+   an untrusted test certificate, without using up production limits:
+
+   ```bash
+   COMPOSE_PROFILES=letsencrypt
+   LETSENCRYPT_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory
+   ```
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. Within about 5 minutes the relay logs
+   `TLS certificate: installed a new one from Let's Encrypt`. Until then it serves
+   the self-signed certificate. Mail keeps flowing either way.
+5. Switch to production: remove the `LETSENCRYPT_SERVER` line from `.env`, then delete
+   the staging certificate, because certbot would otherwise keep it until it's due:
+
+   ```bash
+   docker compose exec certbot certbot delete --non-interactive --cert-name <POSTFIX_HOSTNAME>
+   docker compose up -d
+   ```
+
+The sidecar checks every 12 hours and renews when due, and the relay then loads the
+new certificate with no restart. A failed attempt is logged by the sidecar and retried
+after an hour, and the relay keeps its current certificate. From 14 days before expiry
+the relay logs a daily warning, so watch for this line:
+
+```bash
+docker compose logs | grep 'WARNING: the TLS certificate'
+```
 
 ### 5. Updating
 
@@ -248,15 +309,18 @@ and the running relay is left as it was:
 | `config/client_accounts` | Optional `user password` lines for SASL accounts |
 | `config/client_senders` | Optional `client mailbox` lines giving a printer its own sender (step 3a) |
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise, see step 4) |
+| `cloudflare.ini` | Optional Cloudflare token for the Let's Encrypt sidecar (step 4a), mounted only into the sidecar |
 | `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
 | `scripts/outbound-graph.sh` / `scripts/outbound-smtp.sh` | Outbound-mode adapters: each owns its mode's Postfix config, aux services, OAuth scope, and token store |
 | `scripts/graph-send.sh` | graph mode pipe transport: posts one queued message to Graph `sendMail` |
 | `scripts/graph-size-test.sh` | graph mode: sends real test mails to find which scan sizes Microsoft accepts |
+| `scripts/tls-cert.sh` | Chooses the certificate Postfix serves and loads a new one when it changes |
+| `scripts/letsencrypt-renew.sh` | Runs in the certbot sidecar: obtains and renews the Let's Encrypt certificate |
 | `scripts/sender-rewrite.sh` | Pipe transport for mapped clients: overwrites the sender, then re-injects the message |
 | `scripts/fetch-token.sh` | One-shot Entra ID token fetch; hands the token to the mode adapter (used at startup and by the refresher loop) |
 
 Everything is rendered at container start. Changes in `config/` are applied by
-`docker compose restart`. Changes in `.env` need `docker compose up -d`, because
+`docker compose restart`, except `config/tls/`, which is loaded by itself. Changes in `.env` need `docker compose up -d`, because
 Docker only reads that file when it creates the container.
 
 
@@ -351,6 +415,9 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   failed. A From naming a second mailbox **inside** the scope is **not yet tested**.
   Clients with a mapped mailbox (step 3a) are not affected, because their From is
   overwritten.
+- The Cloudflare token can edit DNS for its whole zone. It's only in `cloudflare.ini`
+  and the sidecar's volume, never in the relay. The relay does mount the volume
+  read-only for the certificate, which also holds certbot's Let's Encrypt account key.
 - smtp mode: Microsoft is retiring Basic Auth for SMTP submission through
   2026; XOAUTH2 as used here is the supported replacement path.
 
@@ -370,9 +437,14 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   end-to-end to the mock Graph `sendMail` endpoint; the real
   `smtp.office365.com` leg of smtp mode needs real credentials and is not
   covered. Separate stacks cover per-client mailboxes: followed to the mock Graph
-  in graph mode, and to the queue, with delivery held, in smtp mode.
+  in graph mode, and to the queue, with delivery held, in smtp mode. Further stacks
+  cover TLS certificates: your own, renewed on disk, and the real certbot sidecar
+  against Pebble, Let's Encrypt's test server, with a mock Cloudflare API
+  (`test/mock-cloudflare.py`).
 
-All of this runs against mocks. It proves what the relay sends, not what
+Issuing and renewing a certificate with real Cloudflare DNS has been run once by hand
+against the Let's Encrypt staging server, with no printer connected. A production
+certificate has not been tried. Everything else in this section runs against mocks. It proves what the relay sends, not what
 Microsoft does with it. **Not yet proven against a real tenant:**
 
 - attachments above 10 MB, and the status code Graph uses to refuse by size

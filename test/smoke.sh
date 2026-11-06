@@ -15,7 +15,7 @@ MOCK=postfix-oauth-test-mockgraph
 PROJECT=""
 COMPOSE=""
 
-cleanup() { [ -n "$COMPOSE" ] && $COMPOSE down -v >/dev/null 2>&1; }
+cleanup() { [ -n "$COMPOSE" ] && $COMPOSE down -v >/dev/null 2>&1; rm -rf test/.tls-fixtures; }
 trap cleanup EXIT
 
 pass=0; fail=0
@@ -54,7 +54,7 @@ smtp_dialogue_tls() {
 
 boot_stack() { # boot_stack <mode> [fixture-dir, relative to test/]
     PROJECT="postfix-oauth-test-$1"
-    COMPOSE="docker compose -p $PROJECT -f test/compose.$1.test.yml"
+    COMPOSE="docker compose -p $PROJECT -f test/compose.$1.test.yml ${EXTRA_COMPOSE:-}"
     export FIXTURES="./${2:-fixtures}"
     echo
     echo "=== OUTBOUND_MODE=$1, config from test/${2:-fixtures} ==="
@@ -355,6 +355,154 @@ fi
 
 cleanup
 unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER
+
+# ------------------------------------------------------- certificate handling
+# What a client on 587 is served: subject, issuer, serial, key type and name
+served_cert() {
+    docker exec "$RELAY" sh -c 'echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:587 2>/dev/null | openssl x509 -noout -subject -issuer -serial -text 2>&1'
+}
+served_serial() { served_cert | sed -n 's/^serial=//p'; }
+wait_served() { # wait_served <check name> <regex> [tries]: the relay switches by itself
+    local out=""
+    for _ in $(seq 1 "${3:-30}"); do
+        out=$(served_cert)
+        printf '%s\n' "$out" | grep -qE "$2" && break
+        sleep 2
+    done
+    check "$1" "$2" "$out"
+}
+restart_relay() {
+    docker restart "$RELAY" >/dev/null
+    sleep 2
+    for _ in $(seq 1 60); do docker exec "$RELAY" sh -c 'nc -z 127.0.0.1 25' 2>/dev/null && break; sleep 1; done
+}
+absent() { # absent <check name> <regex> <output>
+    if printf '%s\n' "$3" | grep -qE "$2"; then check "$1" 'absent' "found /$2/"; else check "$1" 'absent' 'absent'; fi
+}
+make_cert() { # make_cert <dir> <name> [days]
+    mkdir -p "$1"
+    MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days "${3:-30}" -subj "/CN=$2" \
+        -keyout "$1/key.pem" -out "$1/cert.pem" 2>/dev/null
+}
+
+TLSFX=test/.tls-fixtures
+rm -rf "$TLSFX"
+for dir in live half mismatch; do mkdir -p "$TLSFX/$dir"; cp test/fixtures/* "$TLSFX/$dir/"; done
+
+make_cert "$TLSFX/half/tls" half.example.test
+rm "$TLSFX/half/tls/key.pem"
+out=$(FIXTURES=./.tls-fixtures/half run_entrypoint)
+check "boot refuses a certificate without its key" 'FATAL: /config/tls needs both' "$out"
+
+make_cert "$TLSFX/mismatch/tls" one.example.test
+make_cert "$TLSFX/other" two.example.test
+cp "$TLSFX/other/key.pem" "$TLSFX/mismatch/tls/key.pem"
+out=$(FIXTURES=./.tls-fixtures/mismatch run_entrypoint)
+check "boot refuses a key that belongs to another certificate" "FATAL: /config/tls/cert.pem and key.pem .*don't belong together" "$out"
+
+out=$(FIXTURES=./.tls-fixtures/mismatch COMPOSE_PROFILES=letsencrypt run_entrypoint)
+check "boot refuses config/tls together with Let's Encrypt" 'FATAL: /config/tls is set and so is the letsencrypt profile' "$out"
+out=$(FIXTURES=./fixtures COMPOSE_PROFILES=letsencrypt run_entrypoint)
+check "boot refuses Let's Encrypt for a private hostname" 'FATAL: the letsencrypt profile needs POSTFIX_HOSTNAME' "$out"
+docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v --remove-orphans >/dev/null 2>&1
+
+# a mounted certificate, renewed on disk, with no restart
+make_cert "$TLSFX/live/tls" first.example.test 1
+export TLS_WATCH_SECONDS=2
+boot_stack graph .tls-fixtures/live
+wait_served "a mounted certificate is served" 'subject=CN *= *first\.example\.test'
+check "boot log names the certificate's source" 'TLS certificate: config/tls' "$(docker logs "$RELAY" 2>&1)"
+check "a certificate near its expiry is warned about" 'WARNING: the TLS certificate from config/tls .*less than 14 days' "$(docker logs "$RELAY" 2>&1)"
+make_cert "$TLSFX/live/tls" renewed.example.test
+wait_served "a renewed certificate is served without a restart" 'subject=CN *= *renewed\.example\.test'
+
+cp "$TLSFX/other/key.pem" "$TLSFX/live/tls/key.pem"
+sleep 5
+check "a mismatched key is logged" "WARNING: the certificate from config/tls and its key don't belong together" "$(docker logs "$RELAY" 2>&1)"
+wait_served "a mismatched key leaves the working certificate in place" 'subject=CN *= *renewed\.example\.test' 1
+
+rm -rf "$TLSFX/live/tls"
+restart_relay
+wait_served "a removed certificate doesn't survive a restart" 'subject=CN *= *mailrelay\.test\.local'
+out=$(smtp_dialogue_tls 587 'MAIL FROM:<printers@example.com>')
+check "the self-signed certificate works for STARTTLS" '250 2\.1\.0' "$out"
+cleanup
+unset TLS_WATCH_SECONDS
+
+# ------------------------------------------------------------- Let's Encrypt
+# The real sidecar definition against Pebble, with a mock Cloudflare API. The mock
+# only knows example.com, so a wrong name or zone lookup fails the issuance.
+cloudflare_state() {
+    docker exec postfix-oauth-test-mockcloudflare python3 -c \
+        "import urllib.request as u;print(u.urlopen('http://127.0.0.1:8081/_state').read().decode())"
+}
+CERTBOT=postfix-oauth-test-certbot
+EXTRA_COMPOSE="-f test/compose.letsencrypt.test.yml" boot_stack graph
+check "boot log says the relay is waiting for the sidecar" 'self-signed, until the Let.s Encrypt sidecar' "$(docker logs "$RELAY" 2>&1)"
+wait_served "the relay switches to the sidecar's certificate by itself" 'issuer=.*Pebble' 60
+served=$(served_cert)
+check "the certificate is for POSTFIX_HOSTNAME" 'DNS:relay\.example\.com' "$served"
+check "the certificate is RSA, for older printers" 'Public Key Algorithm: rsaEncryption' "$served"
+state=$(cloudflare_state)
+check "the DNS challenge used the token from cloudflare.ini" 'Bearer test-token-for-mock-cloudflare' "$state"
+check "the DNS challenge record was cleaned up" '"present": 0' "$state"
+absent "the relay has no Cloudflare token" 'test-token-for-mock-cloudflare|cloudflare\.ini' \
+    "$(docker exec "$RELAY" sh -c 'env; ls /run/cloudflare.ini 2>/dev/null; grep -rl test-token-for-mock /config /etc/postfix /etc/postfix-relay 2>/dev/null')"
+out=$(smtp_dialogue_tls 587 "AUTH PLAIN $(auth_plain printer-test)" 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@example.org>')
+check "a client can log in over STARTTLS with this certificate" '250 2\.1\.5' "$out"
+
+serial=$(served_serial)
+out=$(docker exec "$CERTBOT" certbot renew --force-renewal --no-random-sleep-on-renew 2>&1)
+check "the sidecar renews" 'renewals succeeded' "$out"
+added=$(cloudflare_state)
+renewed=""
+for _ in $(seq 1 30); do
+    renewed=$(served_serial)
+    [ -n "$renewed" ] && [ "$renewed" != "$serial" ] && break
+    sleep 2
+done
+if [ -n "$renewed" ] && [ "$renewed" != "$serial" ]; then
+    check "the relay serves the renewed certificate without a restart" 'ok' 'ok'
+else
+    check "the relay serves the renewed certificate without a restart" 'ok' "still serial $renewed"
+fi
+check "the relay logs the new certificate" "TLS certificate: installed a new one from Let's Encrypt" "$(docker logs "$RELAY" 2>&1)"
+
+docker restart "$CERTBOT" >/dev/null
+not_due=""
+for _ in $(seq 1 30); do
+    not_due=$(docker logs "$CERTBOT" 2>&1)
+    printf '%s\n' "$not_due" | grep -q 'not yet due for renewal' && break
+    sleep 2
+done
+check "a restarted sidecar leaves a certificate that isn't due" 'not yet due for renewal' "$not_due"
+if [ "$added" = "$(cloudflare_state)" ]; then
+    check "and creates no new DNS challenge" 'ok' 'ok'
+else
+    check "and creates no new DNS challenge" 'ok' "before: $added"
+fi
+
+$COMPOSE up -d --force-recreate --no-deps relay >/dev/null 2>&1
+sleep 2
+for _ in $(seq 1 60); do docker exec "$RELAY" sh -c 'nc -z 127.0.0.1 25' 2>/dev/null && break; sleep 1; done
+check "a recreated relay starts with the certificate" "TLS certificate: Let's Encrypt" "$(docker logs "$RELAY" 2>&1)"
+check "and it's the same one" "^$renewed\$" "$(served_serial)"
+
+# README step 4a, moving from staging to production: delete, then the sidecar starts over
+docker exec "$CERTBOT" certbot delete --non-interactive --cert-name relay.example.com >/dev/null 2>&1
+docker restart "$CERTBOT" >/dev/null
+fresh=""
+for _ in $(seq 1 60); do
+    fresh=$(served_serial)
+    [ -n "$fresh" ] && [ "$fresh" != "$renewed" ] && break
+    sleep 2
+done
+if [ -n "$fresh" ] && [ "$fresh" != "$renewed" ]; then
+    check "a deleted certificate is obtained again, with no restart of the relay" 'ok' 'ok'
+else
+    check "a deleted certificate is obtained again, with no restart of the relay" 'ok' "still serial $fresh"
+fi
+cleanup
 
 # ---------------------------------------------------------------- smtp mode
 boot_stack smtp

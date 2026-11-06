@@ -1,0 +1,55 @@
+# Added on top of compose.graph.test.yml: the real sidecar definition against Pebble,
+# Let's Encrypt's test server, with a mock Cloudflare API in front of Pebble's DNS.
+services:
+  relay:
+    environment:
+      POSTFIX_HOSTNAME: relay.example.com
+      COMPOSE_PROFILES: letsencrypt
+      TLS_WATCH_SECONDS: "2"
+    volumes:
+      - letsencrypt:/etc/letsencrypt:ro
+
+  certbot:
+    extends:
+      file: ../docker-compose.graph.yml
+      service: certbot
+    container_name: postfix-oauth-test-certbot
+    profiles: !override []
+    restart: "no"
+    environment:
+      POSTFIX_HOSTNAME: relay.example.com
+      LETSENCRYPT_SERVER: https://pebble:14000/dir
+      REQUESTS_CA_BUNDLE: /pebble-certs/pebble.minica.pem
+      CLOUDFLARE_BASE_URL: http://mockcloudflare:8081/client/v4
+    volumes:
+      - ./cloudflare.test.ini:/run/cloudflare.ini:ro
+      - pebble-certs:/pebble-certs:ro
+    depends_on:
+      - pebble
+      - mockcloudflare
+
+  pebble:
+    image: ghcr.io/letsencrypt/pebble:latest
+    command: ["-config", "test/config/pebble-config.json", "-dnsserver", "challtestsrv:8053"]
+    environment:
+      PEBBLE_VA_NOSLEEP: "1"
+      PEBBLE_WFE_NONCEREJECT: "0"
+    volumes:
+      - pebble-certs:/test/certs
+    depends_on:
+      - challtestsrv
+
+  challtestsrv:
+    image: ghcr.io/letsencrypt/pebble-challtestsrv:latest
+    command: ["-defaultIPv6", "", "-defaultIPv4", "127.0.0.1"]
+
+  mockcloudflare:
+    image: python:3-alpine
+    container_name: postfix-oauth-test-mockcloudflare
+    volumes:
+      - ./mock-cloudflare.py:/mock-cloudflare.py:ro
+    command: ["python3", "/mock-cloudflare.py", "8081", "http://challtestsrv:8055"]
+
+volumes:
+  letsencrypt:
+  pebble-certs:
