@@ -18,69 +18,37 @@ shift
 
 msg=$(mktemp)
 response=$(mktemp)
-attachment=""
-trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$response" "$attachment"' EXIT
+trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$msg.bounce" "$response"' EXIT
 cat > "$msg"
 
 # Postfix's own notices have no mailbox to send from: bounces arrive with the
 # null sender, which pipe(8) expands to MAILER-DAEMON, and postmaster notices
 # with double_bounce_sender. A bounce becomes a plain text notice to
-# FAILURE_NOTICE_MAILBOX, sent as FAILURE_NOTICE_SENDER, if those are set. Everything else is only logged, since
-# posting it would just fail at Graph; postmaster notices can quote printer
-# credentials from the SMTP transcript, so they are never mailed. pipe(8) logs
-# command output only on failure, hence exit 69; Postfix discards an
-# undeliverable notice without generating another one.
-# Decodes MIME encoded words (=?charset?Q|B?text?=) to UTF-8, for showing a subject
-# in a notice. A word that can't be decoded stays as it is, so a strange subject can
-# never cost the notice. Control characters become spaces, keeping it on one line.
-decode_subject() {
-    local rest=$1 out="" word charset encoding text before decoded previous_word=""
-    local pattern='=\?([^?[:space:]]+)\?([BbQq])\?([^?[:space:]]*)\?='
-    while [[ "$rest" =~ $pattern ]]; do
-        word=${BASH_REMATCH[0]}
-        charset=${BASH_REMATCH[1]%%\**}
-        encoding=${BASH_REMATCH[2]}
-        text=${BASH_REMATCH[3]}
-        before=${rest%%"$word"*}
-        rest=${rest#*"$word"}
-        # whitespace between two encoded words is not part of the subject
-        if [ -z "$previous_word" ] || [ -n "${before//[[:space:]]/}" ]; then
-            out+=$before
-        fi
-        case "$encoding" in
-            [Bb]) decoded=$(printf '%s' "$text" | base64 -d 2>/dev/null | iconv -f "$charset" -t UTF-8 2>/dev/null) ;;
-            *)
-                text=${text//\\/\\\\}
-                text=${text//_/ }
-                decoded=$(printf '%b' "$(printf '%s' "$text" | sed -E 's/=([0-9A-Fa-f]{2})/\\x\1/g')" \
-                    | iconv -f "$charset" -t UTF-8 2>/dev/null)
-                ;;
-        esac
-        # shellcheck disable=SC2181
-        if [ "$?" -eq 0 ] && [ -n "$decoded" ]; then
-            out+=$decoded
-        else
-            out+=$word
-        fi
-        previous_word=yes
-    done
-    printf '%s' "$out$rest" | tr '\000-\037\177' ' '
+# FAILURE_NOTICE_MAILBOX, sent as FAILURE_NOTICE_SENDER, if those are set.
+# Everything else is only logged, since posting it would just fail at Graph;
+# postmaster notices can quote printer credentials from the SMTP transcript, so
+# they are never mailed. pipe(8) logs command output only on failure, hence exit
+# 69; Postfix discards an undeliverable notice without generating another one.
+#
+# failure-notice.sh is called through bash and by its own directory: pipe(8)'s
+# scrubbed PATH doesn't reach it, and it isn't executable in a checkout. Its
+# failure defers, so that no broken notice is posted and no bounce is lost.
+notice_failed() {
+    echo "graph-send: FAILURE NOTICE NOT SENT: failure-notice.sh failed, deferring" >&2
+    exit 75
+}
+failure_notice() { bash "$(dirname "$0")/failure-notice.sh" "$@"; }
+# write_notice <failure-notice.sh arguments>: replaces $msg with what it builds
+# from the bounce, which stays in $msg.bounce for a second notice.
+write_notice() {
+    failure_notice "$@" < "$msg.bounce" > "$msg.notice" && mv -f "$msg.notice" "$msg"
 }
 
 log_prefix=""
+attached=""
 case "$sender" in
     MAILER-DAEMON|double-bounce@*)
-        # Only the delivery-status part and the failed message's headers are read,
-        # so nothing from the message's content can reach the log or the notice.
-        report=$(tr -d '\r' < "$msg" | awk '
-            /^Content-Type: message\/delivery-status/ { inside = 1; next }
-            inside && /^--/ { exit }
-            inside && /^[ \t]/ { sub(/^[ \t]+/, " "); line = line $0; next }
-            inside { if (line != "") print line; line = $0 }
-            END { if (line != "") print line }')
-        failed=$(printf '%s\n' "$report" | sed -n 's/^Final-Recipient: *rfc822; *//p' | paste -sd, -)
-        original=$(printf '%s\n' "$report" | sed -n 's/^X-Postfix-Queue-ID: *//p' | head -n 1)
-        details="original message ${original:-unknown}, failed recipients ${failed:-unknown}"
+        details=$(failure_notice details < "$msg") || notice_failed
         if [ "$sender" != MAILER-DAEMON ] || [ -z "${FAILURE_NOTICE_MAILBOX:-}" ]; then
             echo "graph-send: FAILURE NOTICE NOT SENT to $* (no mailbox to send it from): $details" >&2
             exit 69
@@ -88,73 +56,12 @@ case "$sender" in
         log_prefix="FAILURE NOTICE NOT SENT to $FAILURE_NOTICE_MAILBOX ($details): "
         sender=$FAILURE_NOTICE_SENDER
         set -- "$FAILURE_NOTICE_MAILBOX"
-
-        # Plain text, because Graph accepts a multipart/report with a 2xx but Exchange
-        # does not deliver it (tested live). Graph takes sender and recipients from
-        # these headers.
-        original_sender=$(printf '%s\n' "$report" | sed -n 's/^X-Postfix-Sender: *rfc822; *//p' | head -n 1)
-        original_subject=$(tr -d '\r' < "$msg" | awk '
-            /^Content-Type: (message\/rfc822|text\/rfc822-headers)/ { part = 1; next }
-            part == 1 && /^$/ { part = 2; next }
-            part == 2 && /^$/ { exit }
-            part == 2 && /^[ \t]/ { if (found) { sub(/^[ \t]+/, " "); subject = subject $0 } next }
-            part == 2 { found = (tolower($0) ~ /^subject:/); if (found) subject = substr($0, 9) }
-            END { sub(/^[ \t]+/, "", subject); print subject }')
-        original_subject=$(decode_subject "$original_subject")
-        notice_headers=$(
-            tr -d '\r' < "$msg" | sed '/^$/q' | grep -iE '^(date|message-id):'
-            printf 'From: %s\nTo: %s\n' "$sender" "$1"
-            printf 'Subject: Mail relay: delivery failed (%s)\n' "${original:-unknown}"
-            printf 'Auto-Submitted: auto-replied\nMIME-Version: 1.0'
-        )
-        notice_text() { # notice_text <how to describe the message's content>
-            printf 'A message sent through the mail relay could not be delivered, and the\n'
-            printf 'relay will not retry it.\n\n'
-            printf 'Queue ID: %s\n' "${original:-unknown}"
-            printf 'Sender:   %s\n' "${original_sender:-unknown}"
-            printf 'Subject:  %s\n\n' "${original_subject:-unknown}"
-            printf '%s\n' "$report" | awk '
-                /^Final-Recipient:/ { sub(/^[^;]*; */, ""); print "Recipient: " $0 }
-                /^Status:/ { sub(/^[^:]*: */, ""); print "Status:    " $0 }
-                /^Diagnostic-Code:/ { sub(/^[^;]*; */, ""); print "Reason:    " $0; print "" }'
-            printf '%s\n' "$1"
-        }
-        write_plain_notice() { # write_plain_notice <how to describe the message's content>
-            {
-                printf '%s\nContent-Type: text/plain; charset=utf-8\n\n' "$notice_headers"
-                notice_text "$1"
-            } > "$msg.notice"
-        }
-
-        # The attachment comes from the report's message/rfc822 part. An attachment
-        # is only safe outside a multipart/report, which Exchange does not deliver.
-        attachment=""
-        if [ "${FAILURE_NOTICE_ATTACH_MESSAGE:-}" = yes ]; then
-            attachment=$(mktemp)
-            report_boundary=$(tr -d '\r' < "$msg" | sed '/^$/q' | sed -n 's/.*boundary="\([^"]*\)".*/\1/p' | head -n 1)
-            tr -d '\r' < "$msg" | awk -v end="--$report_boundary--" '
-                part == 2 && $0 == end { exit }
-                part == 2 { print; next }
-                part == 1 && /^$/ { part = 2; next }
-                /^Content-Type: message\/rfc822/ { part = 1 }' > "$attachment"
-        fi
-        if [ -s "$attachment" ]; then
-            boundary="relay-notice-${original:-unknown}-$$"
-            {
-                printf '%s\nContent-Type: multipart/mixed; boundary="%s"\n\n' "$notice_headers" "$boundary"
-                printf -- '--%s\nContent-Type: text/plain; charset=utf-8\n\n' "$boundary"
-                notice_text "The failed message is attached. The relay's log has more under the queue ID."
-                printf -- '\n--%s\nContent-Type: message/rfc822\n' "$boundary"
-                printf 'Content-Disposition: attachment; filename="failed-message.eml"\n\n'
-                cat "$attachment"
-                printf -- '\n--%s--\n' "$boundary"
-            } > "$msg.notice"
+        mv -f "$msg" "$msg.bounce"
+        if [ "${FAILURE_NOTICE_ATTACH_MESSAGE:-}" = yes ] && write_notice attached "$sender" "$1"; then
+            attached=yes
         else
-            attachment=""
-            write_plain_notice "The message's content is not included. The relay's log has more under the
-queue ID."
-        fi
-        mv -f "$msg.notice" "$msg" ;;
+            write_notice plain "$sender" "$1" || notice_failed
+        fi ;;
 esac
 
 if ! token=$(cat "$TOKEN_FILE" 2>/dev/null) || [ -z "$token" ]; then
@@ -201,10 +108,8 @@ post_message
 case "$status" in
     429) ;;
     4*)
-        if [ -n "${attachment:-}" ]; then
-            write_plain_notice "The failed message could not be attached: Graph refused the notice with it,
-HTTP $status. The relay's log has more under the queue ID."
-            mv -f "$msg.notice" "$msg"
+        if [ -n "$attached" ]; then
+            write_notice plain "$sender" "$1" "$status" || notice_failed
             post_message
         fi ;;
 esac

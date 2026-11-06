@@ -189,32 +189,17 @@ check "bounce with a configured mailbox exits 0" "0" "$(cat "$TMP/exit")"
 check "bounce is sent as the configured sender" \
     "/v1.0/users/noreply@example.com/sendMail" "$(req_field path)"
 req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
-check "bounce gets the configured sender in From" "From: noreply@example.com" \
-    "$(grep -i '^From:' "$TMP/decoded" | tr -d '\r')"
-check "bounce goes only to the configured mailbox" "To: notices@example.com" \
-    "$(grep -i '^To:' "$TMP/decoded" | tr -d '\r')"
-check "notice is plain text, because Exchange drops a multipart/report" \
-    "Content-Type: text/plain; charset=utf-8" "$(grep -i '^Content-Type:' "$TMP/decoded")"
-check "notice subject names the queue ID" "Subject: Mail relay: delivery failed (ABC123)" \
-    "$(grep -m1 '^Subject:' "$TMP/decoded")"
-check "notice keeps the bounce's Message-Id" "Message-Id: <bounce-1@relay>" \
-    "$(grep -i '^Message-Id:' "$TMP/decoded")"
-for expected in 'Queue ID: ABC123' 'Sender:   printers@example.com' 'Subject:  Scan from lobby printer' \
-    'Recipient: user@example.org' 'Recipient: second@example.org' 'Status:    5.3.0' \
-    'HTTP 403 from Graph' 'ErrorAccessDenied'; do
-    if grep -qF "$expected" "$TMP/decoded"; then
-        echo "PASS: notice states '$expected'"; pass=$((pass+1))
+# What a notice says is tested in failure-notice.test.sh. Here: it's what gets posted.
+same_as_module() { # same_as_module <name> <failure-notice.sh plain arguments>
+    local name=$1; shift
+    printf '%s' "$NOTICE" | bash scripts/failure-notice.sh plain noreply@example.com notices@example.com "$@" > "$TMP/expected"
+    if cmp -s "$TMP/expected" "$TMP/decoded"; then
+        echo "PASS: $name"; pass=$((pass+1))
     else
-        echo "FAIL: notice states '$expected'"; fail=$((fail+1))
+        echo "FAIL: $name"; fail=$((fail+1))
     fi
-done
-for leak in 'SCAN CONTENT MARKER' 'planted' 'multipart' 'Mail Delivery System'; do
-    if grep -qF "$leak" "$TMP/decoded"; then
-        echo "FAIL: notice must not contain '$leak'"; fail=$((fail+1))
-    else
-        echo "PASS: notice does not contain '$leak'"; pass=$((pass+1))
-    fi
-done
+}
+same_as_module "the post is the plain notice, to the mailbox, as the sender"
 if grep -qi '^Bcc:' "$TMP/decoded"; then
     echo "FAIL: original sender is not added as Bcc"; fail=$((fail+1))
 else
@@ -245,58 +230,79 @@ lacks_text() { # lacks_text <name> <text>
         echo "PASS: $1"; pass=$((pass+1))
     fi
 }
+requests() { grep -c sendMail "$TMP/requests.jsonl"; }
 run_attached
 check "attached notice exits 0" "0" "$(cat "$TMP/exit")"
 req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
-has_text "attached notice is multipart/mixed" 'Content-Type: multipart/mixed'
-lacks_text "attached notice is not a multipart/report" 'multipart/report'
-has_text "attached notice names the attachment" 'filename="failed-message.eml"'
-has_text "attachment holds the failed message" 'SCAN CONTENT MARKER'
-has_text "attachment keeps the failed message's headers" 'Subject: Scan from'
-lacks_text "attachment leaves out the delivery report" 'Reporting-MTA'
-has_text "attached notice still gives the failure" 'HTTP 403 from Graph'
-check "attached notice has one top-level recipient" "To: notices@example.com" \
-    "$(sed '/^$/q' "$TMP/decoded" | grep -i '^To:')"
+has_text "the setting posts the notice with its attachment" 'filename="failed-message.eml"'
+has_text "the post holds the failed message" 'SCAN CONTENT MARKER'
 
 # A failure the attachment can't survive: refused with it, delivered without it
-requests_before=$(grep -c sendMail "$TMP/requests.jsonl")
+requests_before=$(requests)
 echo 1200 > "$TMP/max_body"
 run_attached
 rm -f "$TMP/max_body"
 check "notice refused with its attachment still gets through" "0" "$(cat "$TMP/exit")"
-check "that takes exactly one more request" "$((requests_before + 2))" "$(grep -c sendMail "$TMP/requests.jsonl")"
+check "that takes exactly one more request" "$((requests_before + 2))" "$(requests)"
 req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
 lacks_text "the retry drops the attachment" 'SCAN CONTENT MARKER'
 has_text "the retry says why" 'could not be attached: Graph refused the notice with it,'
 has_text "the retry gives Graph's status" 'HTTP 413'
+same_as_module "the retry is built from the bounce, with the first request's status" 413
 
 echo 403 > "$TMP/status"
+requests_before=$(requests)
 run_attached
 check "notice refused either way exits 69" "69" "$(cat "$TMP/exit")"
+check "and is sent only once more" "$((requests_before + 2))" "$(requests)"
 echo 202 > "$TMP/status"
 
-# --- encoded subjects are shown decoded ----------------------------------------
-subject_shown() { # subject_shown <Subject header value>: the Subject line in the notice
-    local bounce=${NOTICE//Subject: Scan from$'\r\n' lobby printer/Subject: $1}
-    printf '%s' "$bounce" | \
-        TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
-        FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com \
-        bash scripts/graph-send.sh MAILER-DAEMON printers@example.com 2>/dev/null
-    req_field body | base64 -d 2>/dev/null | sed -n 's/^Subject:  //p' | tr -d '\r'
-}
-check "decodes quoted-printable UTF-8" 'relay-test 10 Prüfung äöü' \
-    "$(subject_shown '=?utf-8?Q?relay-test_10_Pr=C3=BCfung_=C3=A4=C3=B6=C3=BC?=')"
-check "decodes base64 UTF-8" 'Prüfung' "$(subject_shown '=?UTF-8?B?UHLDvGZ1bmc=?=')"
-check "decodes Latin-1" 'Prüfung' "$(subject_shown '=?iso-8859-1?Q?Pr=FCfung?=')"
-check "joins adjacent encoded words" 'Prüfung äöü' \
-    "$(subject_shown '=?utf-8?Q?Pr=C3=BCfung_?= =?utf-8?Q?=C3=A4=C3=B6=C3=BC?=')"
-check "keeps text around an encoded word" 'Scan für Empfang (2)' \
-    "$(subject_shown 'Scan =?utf-8?Q?f=C3=BCr?= Empfang (2)')"
-check "leaves a plain subject alone" 'Scan 100% = done_now' "$(subject_shown 'Scan 100% = done_now')"
-check "keeps a word in an unknown charset" '=?no-such-charset?Q?abc?=' \
-    "$(subject_shown '=?no-such-charset?Q?abc?=')"
-check "keeps a word that is invalid in its charset" '=?utf-8?Q?=FF?=' "$(subject_shown '=?utf-8?Q?=FF?=')"
-check "control characters can't add lines to the notice" 'a b' "$(subject_shown '=?utf-8?Q?a=0Ab?=')"
+# The exit code comes from the retry, and the log gives the retry's sizes
+echo 403 > "$TMP/status_once"
+echo 503 > "$TMP/status"
+run_attached
+check "a retry that meets a Graph outage defers" "75" "$(cat "$TMP/exit")"
+echo 202 > "$TMP/status"
+echo 10 > "$TMP/max_body"
+run_attached
+rm -f "$TMP/max_body"
+check "a notice too large either way bounces" "69" "$(cat "$TMP/exit")"
+if grep -q 'FAILURE NOTICE NOT SENT.*MESSAGE TOO LARGE.*message [0-9]* bytes, request [0-9]* bytes' "$TMP/stderr"; then
+    echo "PASS: that is logged as too large, with the sizes"; pass=$((pass+1))
+else
+    echo "FAIL: that is logged as too large, with the sizes: $(cat "$TMP/stderr")"; fail=$((fail+1))
+fi
+
+# Only a refusal is worth a retry, and only of a notice that had an attachment
+for no_retry in 429 503; do
+    echo "$no_retry" > "$TMP/status"
+    requests_before=$(requests)
+    run_attached
+    check "attached notice is not retried on $no_retry" "$((requests_before + 1))" "$(requests)"
+    check "and $no_retry defers" "75" "$(cat "$TMP/exit")"
+done
+echo 403 > "$TMP/status"
+requests_before=$(requests)
+run_notice MAILER-DAEMON
+check "a notice without an attachment is not retried" "$((requests_before + 1))" "$(requests)"
+ORIGINAL_NOTICE=$NOTICE
+NOTICE="${NOTICE%%--B/relay$'\r\n'Content-Description: Undelivered*}--B/relay--"$'\r\n'
+requests_before=$(requests)
+run_attached
+check "nor is one whose bounce held nothing to attach" "$((requests_before + 1))" "$(requests)"
+NOTICE=$ORIGINAL_NOTICE
+echo 202 > "$TMP/status"
+
+# A notice that can't be built defers, instead of posting nothing or losing it
+mkdir "$TMP/no-module"
+cp scripts/graph-send.sh "$TMP/no-module/"
+requests_before=$(requests)
+printf '%s' "$NOTICE" | \
+    TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
+    FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com \
+    bash "$TMP/no-module/graph-send.sh" MAILER-DAEMON printers@example.com 2>/dev/null
+check "a failing failure-notice.sh defers" "75" "$?"
+check "and nothing is posted" "$requests_before" "$(requests)"
 
 echo 403 > "$TMP/status"
 run_notice MAILER-DAEMON

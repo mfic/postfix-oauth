@@ -27,6 +27,9 @@ jobs:
       - name: Unit tests (graph-send)
         run: ./test/graph-send.test.sh
 
+      - name: Unit tests (failure-notice)
+        run: bash ./test/failure-notice.test.sh
+
       - name: Unit tests (sender-rewrite)
         run: bash ./test/sender-rewrite.test.sh
 

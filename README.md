@@ -331,6 +331,7 @@ and the running relay is left as it was:
 | `scripts/config-tables.sh` | The one reader of `config/`: checks each file and turns it into Postfix tables, SASL accounts and the sender policy |
 | `scripts/outbound-graph.sh` / `scripts/outbound-smtp.sh` | Outbound-mode adapters: each owns its mode's Postfix config, aux services, OAuth scope, and token store |
 | `scripts/graph-send.sh` | graph mode pipe transport: posts one queued message to Graph `sendMail` |
+| `scripts/failure-notice.sh` | graph mode: turns a Postfix bounce into the plain text failure notice that `graph-send.sh` posts |
 | `scripts/graph-size-test.sh` | graph mode: sends real test mails to find which scan sizes Microsoft accepts |
 | `scripts/tls-cert.sh` | Chooses the certificate Postfix serves and loads a new one when it changes |
 | `scripts/letsencrypt-renew.sh` | Runs in the certbot sidecar: obtains and renews the Let's Encrypt certificate |
@@ -442,7 +443,10 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
 ## Testing
 
 - `./test/graph-send.test.sh` — unit tests for the Graph delivery script
-  against a local mock endpoint (needs bash, curl, python3).
+  against a local mock endpoint (needs bash, curl, python3), including a few
+  failure notices end to end.
+- `./test/failure-notice.test.sh` — unit tests for building a failure notice: a
+  bounce goes in, MIME comes out, with no mock.
 - `./test/sender-rewrite.test.sh` — unit tests for the sender rewrite, with a
   stub `sendmail`.
 - `./test/config.test.sh` — tests for the config reader, with each case's files

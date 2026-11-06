@@ -40,11 +40,12 @@ COPY postfix/master.cf /etc/postfix/master.cf
 COPY postfix/sasl-smtpd.conf /etc/postfix/sasl/smtpd.conf
 COPY postfix/main.cf.tmpl /usr/local/share/postfix-relay/
 COPY scripts/entrypoint.sh scripts/config-tables.sh scripts/token-refresher.sh scripts/fetch-token.sh \
-     scripts/graph-send.sh scripts/graph-size-test.sh scripts/sender-rewrite.sh \
+     scripts/graph-send.sh scripts/failure-notice.sh scripts/graph-size-test.sh scripts/sender-rewrite.sh \
      scripts/outbound-graph.sh scripts/outbound-smtp.sh scripts/tls-cert.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/config-tables.sh \
         /usr/local/bin/token-refresher.sh \
         /usr/local/bin/fetch-token.sh /usr/local/bin/graph-send.sh \
+        /usr/local/bin/failure-notice.sh \
         /usr/local/bin/graph-size-test.sh /usr/local/bin/sender-rewrite.sh \
         /usr/local/bin/outbound-graph.sh /usr/local/bin/outbound-smtp.sh \
         /usr/local/bin/tls-cert.sh
