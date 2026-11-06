@@ -3,7 +3,7 @@
 A dockerized Postfix MTA that lets printers/scanners with **no modern auth
 support** send mail through Microsoft 365. Printers connect either
 
-- **without authentication**, if their fixed IP is whitelisted, or
+- **without authentication**, if their IP is in `config/trusted_networks`, or
 - **with a per-printer username/password** (SASL PLAIN/LOGIN on port 587 or 25).
 
 **Sender lockdown:** only envelope senders listed in `config/allowed_senders`
@@ -111,6 +111,7 @@ Add-RecipientPermission scanner@example.com -Trustee printers@example.com -Acces
 ```bash
 cp .env.example .env                                    # fill in tenant/client/secret
 cp config/allowed_senders.example config/allowed_senders
+cp config/trusted_networks.example config/trusted_networks   # optional
 cp config/printer_accounts.example config/printer_accounts   # optional
 cp config/client_senders.example config/client_senders       # optional, see 3a
 
@@ -141,7 +142,7 @@ printer-lobby    printers@example.com
   and an IP must be a valid address or CIDR. Otherwise the relay refuses to
   start, because a skipped line would let that client choose its own sender.
 - The file grants no relay access: a listed IP still has to be in
-  `PRINTER_NETWORKS` or authenticate.
+  `config/trusted_networks` or authenticate.
 - Each mailbox also needs what step 2a or 2b requires for any sender. In smtp
   mode that means a SendAs grant for `RELAY_MAILBOX`.
 - IP matching needs the relay to see the printer's real source IP. Check for it
@@ -155,7 +156,7 @@ A mapped message appears in the log twice: under its first queue ID with
 
 | Printer capability | Settings |
 |---|---|
-| No auth (IP in `PRINTER_NETWORKS`) | SMTP server = relay IP, port 25, no auth, no TLS needed |
+| No auth (IP in `config/trusted_networks`) | SMTP server = relay IP, port 25, no auth, no TLS needed |
 | Username/password | Port 587 (or 25), STARTTLS if supported, PLAIN/LOGIN with an account from `config/printer_accounts` |
 
 The From/sender address on the printer must be one of `config/allowed_senders`,
@@ -220,10 +221,11 @@ and the running relay is left as it was:
 
 | File | Purpose |
 |---|---|
-| `.env` | Tenant/app credentials, hostname, printer IPs, `COMPOSE_FILE` |
+| `.env` | Tenant/app credentials, hostname, `COMPOSE_FILE`, failure notice mailboxes |
 | `update.sh` | Pulls, rebuilds and restarts a deployed relay |
 | `docker-compose.graph.yml` / `docker-compose.smtp.yml` | Same relay, outbound mode baked in via `OUTBOUND_MODE` |
 | `config/allowed_senders` | Sender whitelist (one address per line) — **required** |
+| `config/trusted_networks` | Optional IPs/CIDRs that may relay without authentication (one per line) |
 | `config/printer_accounts` | Optional `user password` lines for SASL accounts |
 | `config/client_senders` | Optional `client mailbox` lines giving a printer its own sender (step 3a) |
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise) |
@@ -234,8 +236,12 @@ and the running relay is left as it was:
 | `scripts/sender-rewrite.sh` | Pipe transport for mapped clients: overwrites the sender, then re-injects the message |
 | `scripts/fetch-token.sh` | One-shot Entra ID token fetch; hands the token to the mode adapter (used at startup and by the refresher loop) |
 
-Config changes are applied by `docker compose -f <file> restart` (everything
-is rendered at container start).
+Everything is rendered at container start. Changes in `config/` are applied by
+`docker compose restart`. Changes in `.env` need `docker compose up -d`, because
+Docker only reads that file when it creates the container.
+
+`PRINTER_NETWORKS` in `.env`, the older form of `config/trusted_networks`, still
+works, and entries from both count. It is not validated, so prefer the file.
 
 ## Delivery semantics (graph mode)
 
@@ -300,7 +306,7 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
 
 ## Security notes
 
-- The relay accepts mail **only** from `PRINTER_NETWORKS` IPs or authenticated
+- The relay accepts mail **only** from `config/trusted_networks` IPs or authenticated
   clients, and **only** with whitelisted or mapped senders — it is not an open relay,
   but still: run it on an internal network, don't expose port 25 to the internet.
 - Auth on port 25/587 permits plaintext passwords because most printers can't
@@ -402,7 +408,8 @@ both modes:
 
 - `554 ... Sender address rejected: Access denied` on the relay → sender not in
   `config/allowed_senders`.
-- `FATAL: /config/client_senders: ...` at startup → fix the named line (step 3a).
+- `FATAL: /config/client_senders: ...` or `FATAL: /config/trusted_networks: ...` at
+  startup → fix the named line.
 - `554 5.5.0 Error: SMTP protocol synchronization` → the client sent before the
   relay's reply arrived: before the banner, or commands together before `EHLO`
   offered PIPELINING. This is Postfix's default protection

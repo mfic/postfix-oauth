@@ -1,0 +1,6 @@
+# Test fixture: Docker default address pools, so the remote helper is trusted
+10.0.0.0/8      # printer comment
+172.16.0.0/12
+192.168.0.0/16
+2001:db8::/32
+192.0.2.1

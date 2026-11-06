@@ -6,7 +6,6 @@ set -eu
 : "${CLIENT_SECRET:?CLIENT_SECRET is required}"
 export POSTFIX_HOSTNAME="${POSTFIX_HOSTNAME:-mailrelay.local}"
 export POSTFIX_DOMAIN="${POSTFIX_HOSTNAME#*.}"
-export PRINTER_NETWORKS="${PRINTER_NETWORKS:-}"
 
 # outbound variant: graph (Graph Mail.Send, default) or smtp (SMTP XOAUTH2).
 # Everything mode-specific lives in the matching outbound-<mode>.sh adapter.
@@ -56,8 +55,41 @@ if [ -s /config/printer_accounts ]; then
     echo "Loaded $(sasldblistusers2 | wc -l) printer SASL account(s)."
 fi
 
+# ------------------------------------------------------- trusted networks
+# /config/trusted_networks: one IP or CIDR per line, '#' comments allowed. These
+# clients may relay without authentication. Postfix accepts a bad entry at boot
+# without complaint, so check each one here. PRINTER_NETWORKS in the environment
+# is the older form of this list and still counts.
+trusted_networks_fail() {
+    echo "FATAL: /config/trusted_networks: $1" >&2
+    exit 1
+}
+TRUSTED_NETWORKS="${PRINTER_NETWORKS:-}"
+if [ -f /config/trusted_networks ]; then
+    check_table=$(mktemp)
+    while read -r entry extra || [ -n "${entry:-}" ]; do
+        [ -n "$entry" ] || continue
+        [ -z "$extra" ] || trusted_networks_fail "expected one IP or CIDR per line, got '$entry $extra'"
+        [[ "$entry" =~ ^[0-9]+(\.[0-9]+){3}(/[0-9]+)?$ || "$entry" == *:* ]] \
+            || trusted_networks_fail "'$entry' is not an IP or CIDR"
+        [[ "$entry" != */0 ]] || trusted_networks_fail "'$entry' would trust every address (open relay)"
+        printf '%s OK\n' "$entry" > "$check_table"
+        if table_errors=$(postmap -q 0.0.0.0 "cidr:$check_table" 2>&1 | grep -E 'warning|fatal'); then
+            trusted_networks_fail "invalid entry '$entry': $table_errors"
+        fi
+        # mynetworks writes IPv6 addresses in brackets
+        case "$entry" in
+            *:*/*) entry="[${entry%/*}]/${entry##*/}" ;;
+            *:*) entry="[$entry]" ;;
+        esac
+        TRUSTED_NETWORKS="$TRUSTED_NETWORKS $entry"
+    done < <(sed 's/#.*//' /config/trusted_networks | tr -d '\r')
+    rm -f "$check_table"
+fi
+export TRUSTED_NETWORKS
+
 # ------------------------------------------------- render config templates
-envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${PRINTER_NETWORKS}' \
+envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${TRUSTED_NETWORKS}' \
     < "$TEMPLATES/main.cf.tmpl" > /etc/postfix/main.cf
 
 # ------------------------------------------- optional per-client mailboxes

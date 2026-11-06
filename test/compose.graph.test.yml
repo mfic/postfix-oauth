@@ -8,7 +8,7 @@ services:
       CLIENT_ID: 00000000-0000-0000-0000-000000000000
       CLIENT_SECRET: dummy-secret-for-tests
       POSTFIX_HOSTNAME: mailrelay.test.local
-      PRINTER_NETWORKS: ""
+      PRINTER_NETWORKS: ${PRINTER_NETWORKS:-}
       OUTBOUND_MODE: graph
       TOKEN_ENDPOINT: http://mockgraph:8080/token
       FAILURE_NOTICE_MAILBOX: ${FAILURE_NOTICE_MAILBOX:-}

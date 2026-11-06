@@ -1,7 +1,8 @@
 # Domain glossary
 
 - **Relay** — the dockerized Postfix MTA; accepts mail from printers, delivers to Microsoft 365.
-- **Printer** — an SMTP client with no modern auth: connects from a whitelisted IP or with a per-printer SASL account.
+- **Printer** — an SMTP client with no modern auth: connects from a trusted network or with a per-printer SASL account.
+- **Trusted network** — an IP or CIDR in `config/trusted_networks`; clients there may relay without authentication. Not every such client is a printer.
 - **Sender lockdown** — the whitelist in `config/allowed_senders`; binds every client, trusted or authenticated, except that a client sender mapping replaces the sender instead.
 - **Client sender mapping** — optional entry in `config/client_senders` giving one printer (source IP or SASL account) its own mailbox. The relay overwrites that printer's envelope sender and From, then re-injects the message, so outbound modes need no knowledge of it. Unmapped printers stay under the sender lockdown only.
 - **Failure notice** — a message Postfix itself generates (bounce or postmaster notice). It has no mailbox of its own, so in graph mode a bounce goes to `FAILURE_NOTICE_MAILBOX`, sent as `FAILURE_NOTICE_SENDER`, if those are set; otherwise, and for postmaster notices, `graph-send.sh` only logs it.

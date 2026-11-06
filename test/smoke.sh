@@ -133,10 +133,15 @@ run_entrypoint() {
 }
 bad_config_suite() {
     local name expected out
-    for name in bad-mailbox:'not in allowed_senders' bad-account:'not in printer_accounts' bad-ip:'invalid IP entry'; do
+    for name in bad-mailbox:'client_senders: .*not in allowed_senders' \
+        bad-account:'client_senders: .*not in printer_accounts' \
+        bad-ip:'client_senders: invalid IP entry' \
+        bad-network:'trusted_networks: invalid entry' \
+        bad-network-name:'trusted_networks: .*not an IP or CIDR' \
+        bad-network-all:'trusted_networks: .*would trust every address'; do
         expected=${name#*:}
         out=$(FIXTURES="./fixtures-${name%%:*}" run_entrypoint)
-        check "boot refuses ${name%%:*}" "FATAL: /config/client_senders: .*$expected" "$out"
+        check "boot refuses ${name%%:*}" "FATAL: /config/$expected" "$out"
     done
     out=$(FIXTURES=./fixtures FAILURE_NOTICE_MAILBOX=notices@example.com run_entrypoint)
     check "boot refuses a notice mailbox without a sender" 'FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together' "$out"
@@ -188,6 +193,28 @@ check "failed delivery logs the notice that could not be sent" \
     'FAILURE NOTICE NOT SENT to printers@example\.com.*failed recipients user@example\.org' "$notice"
 check "failure notice is not posted to Graph" '^1$' "$(sendmail_requests | wc -l)"
 docker exec "$MOCK" sh -c 'rm -f /state/status'
+
+cleanup
+
+# ---------------------------------------------- graph mode, trusted networks
+# fixtures-trusted lists Docker's default address pools, so the "remote" helper
+# counts as trusted. Runs in one mode: the setting has nothing mode-specific.
+export PRINTER_NETWORKS=198.51.100.0/24
+boot_stack graph fixtures-trusted
+unset PRINTER_NETWORKS
+
+out=$(smtp_dialogue remote 25 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@example.org>')
+check "client in trusted_networks relays without auth" '250 2\.1\.5' "$out"
+out=$(smtp_dialogue remote 25 'MAIL FROM:<evil@nowhere.com>' 'RCPT TO:<user@example.org>')
+check "trusted network stays bound by the whitelist" '554 5\.7\.1 .*Sender address rejected' "$out"
+out=$(docker exec "$RELAY" postconf -h mynetworks)
+check "IPv6 entry is written in brackets" '\[2001:db8::\]/32' "$out"
+check "older PRINTER_NETWORKS still counts" '198\.51\.100\.0/24' "$out"
+if printf '%s\n' "$out" | grep -q 'printer\|#'; then
+    check "comments stay out of mynetworks" 'absent' 'present'
+else
+    check "comments stay out of mynetworks" 'absent' 'absent'
+fi
 
 cleanup
 

@@ -14,8 +14,8 @@ maillog_file = /dev/stdout
 smtpd_banner = $myhostname ESMTP
 message_size_limit = 52428800
 
-# who may relay without auth: the printers' fixed IPs
-mynetworks = 127.0.0.0/8 [::1]/128 ${PRINTER_NETWORKS}
+# who may relay without auth: config/trusted_networks
+mynetworks = 127.0.0.0/8 [::1]/128 ${TRUSTED_NETWORKS}
 
 # inbound (printers -> us)
 smtpd_helo_required = yes

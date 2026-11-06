@@ -1,0 +1,7 @@
+# Optional: clients that may relay WITHOUT authentication - one IP or CIDR per
+# line, '#' comments allowed. They are still bound by allowed_senders.
+# An invalid line, or a /0 network, stops the relay at startup.
+# Copy to config/trusted_networks and edit. Apply with: docker compose restart
+192.168.10.21      # lobby printer
+192.168.10.32/32   # 3rd floor scanner
+10.20.30.0/28      # print server subnet
