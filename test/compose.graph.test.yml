@@ -16,7 +16,6 @@ services:
       GRAPH_ENDPOINT: http://mockgraph:8080/v1.0
       TLS_WATCH_SECONDS: ${TLS_WATCH_SECONDS:-}
       TLS_MIN_VERSION: ${TLS_MIN_VERSION:-}
-      COMPOSE_PROFILES: ${COMPOSE_PROFILES:-}
     volumes:
       - ${FIXTURES:-./fixtures}:/config:ro
     depends_on:

@@ -449,6 +449,9 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   bounce goes in, MIME comes out, with no mock.
 - `./test/sender-rewrite.test.sh` — unit tests for the sender rewrite, with a
   stub `sendmail`.
+- `./test/tls-cert.test.sh` � unit tests for choosing the certificate, with real
+  `openssl` and a stub `postfix`, no Docker: source order, every FATAL, mismatches,
+  what the watcher does on a pass, expiry warnings and the self-signed rules.
 - `./test/config.test.sh` — tests for the config reader, with each case's files
   written inline: the tables, the SASL accounts and every FATAL, including CRLF,
   a missing final newline and comment-only files. Needs Docker: it builds the
@@ -467,9 +470,10 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   entrypoint's two calls to the config reader; `config.test.sh` has every other
   rule. Separate stacks cover per-client mailboxes: followed to the mock Graph
   in graph mode, and to the queue, with delivery held, in smtp mode. Further stacks
-  cover TLS certificates: your own, renewed on disk, and the real certbot sidecar
+  cover TLS certificates: your own served to a client, renewed on disk with a real
+  `postfix reload`, a bad pair stopping a real boot, and the real certbot sidecar
   against Pebble, Let's Encrypt's test server, with a mock Cloudflare API
-  (`test/mock-cloudflare.py`).
+  (`test/mock-cloudflare.py`). `tls-cert.test.sh` has every other certificate rule.
 
 Everything in this section runs against mocks. It proves what the relay sends, not what
 Microsoft does with it. **Not yet proven against a real tenant:**

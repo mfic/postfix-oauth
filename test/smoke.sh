@@ -403,6 +403,8 @@ cleanup
 unset TLS_MIN_VERSION
 
 # ------------------------------------------------------- certificate handling
+# Only what needs a real stack; test/tls-cert.test.sh has the rules for choosing,
+# refusing, replacing and warning.
 # What a client on 587 is served: subject, issuer, serial, key type and name
 served_cert() {
     docker exec "$RELAY" sh -c 'echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:587 2>/dev/null | openssl x509 -noout -subject -issuer -serial -text 2>&1'
@@ -425,47 +427,37 @@ restart_relay() {
 absent() { # absent <check name> <regex> <output>
     if printf '%s\n' "$3" | grep -qE "$2"; then check "$1" 'absent' "found /$2/"; else check "$1" 'absent' 'absent'; fi
 }
-make_cert() { # make_cert <dir> <name> [days]
+make_cert() { # make_cert <dir> <name>
     mkdir -p "$1"
-    MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days "${3:-30}" -subj "/CN=$2" \
+    MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=$2" \
         -keyout "$1/key.pem" -out "$1/cert.pem" 2>/dev/null
 }
 
 TLSFX=test/.tls-fixtures
 rm -rf "$TLSFX"
-for dir in live half mismatch; do mkdir -p "$TLSFX/$dir"; cp test/fixtures/* "$TLSFX/$dir/"; done
-
-make_cert "$TLSFX/half/tls" half.example.test
-rm "$TLSFX/half/tls/key.pem"
-out=$(FIXTURES=./.tls-fixtures/half run_entrypoint)
-check "boot refuses a certificate without its key" 'FATAL: /config/tls needs both' "$out"
+for dir in live mismatch; do mkdir -p "$TLSFX/$dir"; cp test/fixtures/* "$TLSFX/$dir/"; done
 
 make_cert "$TLSFX/mismatch/tls" one.example.test
 make_cert "$TLSFX/other" two.example.test
 cp "$TLSFX/other/key.pem" "$TLSFX/mismatch/tls/key.pem"
 out=$(FIXTURES=./.tls-fixtures/mismatch run_entrypoint)
+status=$?
 check "boot refuses a key that belongs to another certificate" "FATAL: /config/tls/cert.pem and key.pem .*don't belong together" "$out"
-
-out=$(FIXTURES=./.tls-fixtures/mismatch COMPOSE_PROFILES=letsencrypt run_entrypoint)
-check "boot refuses config/tls together with Let's Encrypt" 'FATAL: /config/tls is set and so is the letsencrypt profile' "$out"
-out=$(FIXTURES=./fixtures COMPOSE_PROFILES=letsencrypt run_entrypoint)
-check "boot refuses Let's Encrypt for a private hostname" 'FATAL: the letsencrypt profile needs POSTFIX_HOSTNAME' "$out"
+check "boot stops at a key that belongs to another certificate" '^1$' "$status"
 docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v --remove-orphans >/dev/null 2>&1
 
 # a mounted certificate, renewed on disk, with no restart
-make_cert "$TLSFX/live/tls" first.example.test 1
+make_cert "$TLSFX/live/tls" first.example.test
 export TLS_WATCH_SECONDS=2
 boot_stack graph .tls-fixtures/live
 wait_served "a mounted certificate is served" 'subject=CN *= *first\.example\.test'
-check "boot log names the certificate's source" 'TLS certificate: config/tls' "$(docker logs "$RELAY" 2>&1)"
-check "a certificate near its expiry is warned about" 'WARNING: the TLS certificate from config/tls .*less than 14 days' "$(docker logs "$RELAY" 2>&1)"
 make_cert "$TLSFX/live/tls" renewed.example.test
 wait_served "a renewed certificate is served without a restart" 'subject=CN *= *renewed\.example\.test'
 
+# the rules are in tls-cert.test.sh; this shows the watcher's warnings reach the container log
 cp "$TLSFX/other/key.pem" "$TLSFX/live/tls/key.pem"
 sleep 5
 check "a mismatched key is logged" "WARNING: the certificate from config/tls and its key don't belong together" "$(docker logs "$RELAY" 2>&1)"
-wait_served "a mismatched key leaves the working certificate in place" 'subject=CN *= *renewed\.example\.test' 1
 
 rm -rf "$TLSFX/live/tls"
 restart_relay

@@ -35,6 +35,9 @@ jobs:
       - name: Unit tests (sender-rewrite)
         run: bash ./test/sender-rewrite.test.sh
 
+      - name: Unit tests (tls-cert)
+        run: bash ./test/tls-cert.test.sh
+
       - name: Config tests (in the relay image)
         run: bash ./test/config.test.sh
 

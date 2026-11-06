@@ -6,17 +6,22 @@
 #
 #   tls-cert.sh install   once at boot; config errors are FATAL
 #   tls-cert.sh watch     forever; installs a changed certificate and reloads Postfix
+#   tls-cert.sh tick      one pass of the watcher, without its wait, e.g. for tests
+#
+# TLS_CERT_FILE, TLS_KEY_FILE, TLS_SOURCE_MARK, TLS_MOUNT_DIR and TLS_LETSENCRYPT_LIVE
+# can be overridden, e.g. for tests. main.cf names the default cert and key paths.
 set -u
 
-CERT=/etc/postfix/cert.pem
-KEY=/etc/postfix/key.pem
-SOURCE_MARK=/etc/postfix/cert.source
-MOUNT_DIR=/config/tls
-LETSENCRYPT_DIR="/etc/letsencrypt/live/${POSTFIX_HOSTNAME:-}"
+CERT="${TLS_CERT_FILE:-/etc/postfix/cert.pem}"
+KEY="${TLS_KEY_FILE:-/etc/postfix/key.pem}"
+SOURCE_MARK="${TLS_SOURCE_MARK:-/etc/postfix/cert.source}"
+MOUNT_DIR="${TLS_MOUNT_DIR:-/config/tls}"
+LETSENCRYPT_DIR="${TLS_LETSENCRYPT_LIVE:-/etc/letsencrypt/live}/${POSTFIX_HOSTNAME:-}"
 WATCH_SECONDS="${TLS_WATCH_SECONDS:-300}"
 EXPIRY_WARNING_SECONDS=$((14 * 86400))
 
 src_name=""; src_cert=""; src_key=""
+warned_on="" # the day of the last expiry warning; a tick on its own starts with none
 
 # The same setting starts the sidecar, so the two can't disagree.
 letsencrypt_on() {
@@ -94,7 +99,9 @@ install_at_boot() {
 
     # A certificate left from another source would otherwise survive a restart.
     if [ ! -f "$CERT" ] || [ "$(cat "$SOURCE_MARK" 2>/dev/null)" != "self-signed" ]; then
-        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+        # MSYS_NO_PATHCONV: only for test/tls-cert.test.sh on Windows, whose shell would
+        # rewrite the /CN= below as a path. It means nothing in the container.
+        MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
             -subj "/CN=${POSTFIX_HOSTNAME}" \
             -keyout "$KEY" -out "$CERT" 2>/dev/null
         chmod 600 "$KEY"
@@ -107,29 +114,34 @@ install_at_boot() {
     fi
 }
 
+watch_tick() {
+    local today
+    if find_source && ! { cmp -s "$src_cert" "$CERT" && cmp -s "$src_key" "$KEY"; }; then
+        if ! pair_matches "$src_cert" "$src_key"; then
+            echo "WARNING: the certificate from $src_name and its key don't belong together; keeping the current one." >&2
+        elif install_source && postfix reload >/dev/null 2>&1; then
+            echo "TLS certificate: installed a new one from $src_name, $(describe)."
+        else
+            echo "WARNING: could not install the new certificate from $src_name." >&2
+        fi
+    fi
+    today=$(date +%F)
+    if [ "$today" != "$warned_on" ] && [ "$(cat "$SOURCE_MARK" 2>/dev/null)" != "self-signed" ]; then
+        warn_if_expiring
+        warned_on=$today
+    fi
+}
+
 watch_forever() {
-    local warned_on="" today
     while true; do
         sleep "$WATCH_SECONDS"
-        if find_source && ! { cmp -s "$src_cert" "$CERT" && cmp -s "$src_key" "$KEY"; }; then
-            if ! pair_matches "$src_cert" "$src_key"; then
-                echo "WARNING: the certificate from $src_name and its key don't belong together; keeping the current one." >&2
-            elif install_source && postfix reload >/dev/null 2>&1; then
-                echo "TLS certificate: installed a new one from $src_name, $(describe)."
-            else
-                echo "WARNING: could not install the new certificate from $src_name." >&2
-            fi
-        fi
-        today=$(date +%F)
-        if [ "$today" != "$warned_on" ] && [ "$(cat "$SOURCE_MARK" 2>/dev/null)" != "self-signed" ]; then
-            warn_if_expiring
-            warned_on=$today
-        fi
+        watch_tick
     done
 }
 
 case "${1:-}" in
     install) install_at_boot ;;
     watch) watch_forever ;;
-    *) echo "usage: tls-cert.sh install|watch" >&2; exit 64 ;;
+    tick) watch_tick ;;
+    *) echo "usage: tls-cert.sh install|watch|tick" >&2; exit 64 ;;
 esac
