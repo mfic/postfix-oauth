@@ -30,6 +30,43 @@ cat > "$msg"
 # credentials from the SMTP transcript, so they are never mailed. pipe(8) logs
 # command output only on failure, hence exit 69; Postfix discards an
 # undeliverable notice without generating another one.
+# Decodes MIME encoded words (=?charset?Q|B?text?=) to UTF-8, for showing a subject
+# in a notice. A word that can't be decoded stays as it is, so a strange subject can
+# never cost the notice. Control characters become spaces, keeping it on one line.
+decode_subject() {
+    local rest=$1 out="" word charset encoding text before decoded previous_word=""
+    local pattern='=\?([^?[:space:]]+)\?([BbQq])\?([^?[:space:]]*)\?='
+    while [[ "$rest" =~ $pattern ]]; do
+        word=${BASH_REMATCH[0]}
+        charset=${BASH_REMATCH[1]%%\**}
+        encoding=${BASH_REMATCH[2]}
+        text=${BASH_REMATCH[3]}
+        before=${rest%%"$word"*}
+        rest=${rest#*"$word"}
+        # whitespace between two encoded words is not part of the subject
+        if [ -z "$previous_word" ] || [ -n "${before//[[:space:]]/}" ]; then
+            out+=$before
+        fi
+        case "$encoding" in
+            [Bb]) decoded=$(printf '%s' "$text" | base64 -d 2>/dev/null | iconv -f "$charset" -t UTF-8 2>/dev/null) ;;
+            *)
+                text=${text//\\/\\\\}
+                text=${text//_/ }
+                decoded=$(printf '%b' "$(printf '%s' "$text" | sed -E 's/=([0-9A-Fa-f]{2})/\\x\1/g')" \
+                    | iconv -f "$charset" -t UTF-8 2>/dev/null)
+                ;;
+        esac
+        # shellcheck disable=SC2181
+        if [ "$?" -eq 0 ] && [ -n "$decoded" ]; then
+            out+=$decoded
+        else
+            out+=$word
+        fi
+        previous_word=yes
+    done
+    printf '%s' "$out$rest" | tr '\000-\037\177' ' '
+}
+
 log_prefix=""
 case "$sender" in
     MAILER-DAEMON|double-bounce@*)
@@ -63,6 +100,7 @@ case "$sender" in
             part == 2 && /^[ \t]/ { if (found) { sub(/^[ \t]+/, " "); subject = subject $0 } next }
             part == 2 { found = (tolower($0) ~ /^subject:/); if (found) subject = substr($0, 9) }
             END { sub(/^[ \t]+/, "", subject); print subject }')
+        original_subject=$(decode_subject "$original_subject")
         notice_headers=$(
             tr -d '\r' < "$msg" | sed '/^$/q' | grep -iE '^(date|message-id):'
             printf 'From: %s\nTo: %s\n' "$sender" "$1"

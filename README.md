@@ -286,11 +286,11 @@ FAILURE_NOTICE_ATTACH_MESSAGE=no              # optional, yes attaches the faile
 
 - The sender must be a mailbox in the app's scope (step 2a). It doesn't need to be
   in `allowed_senders`. The recipient can be any address.
-- A notice is plain text with the queue ID, sender, subject, failed recipients and
+- A notice is plain text with the queue ID, sender, decoded subject, failed recipients and
   failure reason, including Graph's error. It contains the message's content only
   with `FAILURE_NOTICE_ATTACH_MESSAGE=yes`.
-- With that setting, the failed message is attached as `failed-message.eml`, so the
-  recipient sees any scans it contains. If Graph refuses the notice with the
+- With that setting, the failed message is attached, so the recipient sees any scans
+  it contains. Outlook shows it as a `.msg` named after the message's subject. If Graph refuses the notice with the
   attachment, for example because the message was too large, the relay sends the
   notice again without it and says so in the text.
   Plain text is required: in a live test, Graph accepted Postfix's usual
@@ -359,15 +359,14 @@ Microsoft does with it. **Not yet proven against a real tenant:**
 - attachments above 10 MB, and the status code Graph uses to refuse by size
 - a From naming a second mailbox inside the app's scope
 - a real printer as the client
-- a notice with `FAILURE_NOTICE_ATTACH_MESSAGE=yes` reaching its recipient
 - all of smtp mode's connection to `smtp.office365.com`, including SendAs and
   failure notices
 
 Tested live once in graph mode, on one tenant (November 2026): a send under RBAC for
 Applications with no Entra `Mail.Send` consent, refusal of a sender outside the
 scope, attachments up to 10 MB, refusal of a From outside the scope, delivery as a
-mapped mailbox, and a real failure producing a notice that arrived without the
-message's content.
+mapped mailbox, and a real failure producing a notice that arrived, both without the
+message's content and with it attached.
 
 ### Continuous checks
 

@@ -275,6 +275,29 @@ run_attached
 check "notice refused either way exits 69" "69" "$(cat "$TMP/exit")"
 echo 202 > "$TMP/status"
 
+# --- encoded subjects are shown decoded ----------------------------------------
+subject_shown() { # subject_shown <Subject header value>: the Subject line in the notice
+    local bounce=${NOTICE//Subject: Scan from$'\r\n' lobby printer/Subject: $1}
+    printf '%s' "$bounce" | \
+        TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
+        FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com \
+        bash scripts/graph-send.sh MAILER-DAEMON printers@example.com 2>/dev/null
+    req_field body | base64 -d 2>/dev/null | sed -n 's/^Subject:  //p' | tr -d '\r'
+}
+check "decodes quoted-printable UTF-8" 'relay-test 10 Prüfung äöü' \
+    "$(subject_shown '=?utf-8?Q?relay-test_10_Pr=C3=BCfung_=C3=A4=C3=B6=C3=BC?=')"
+check "decodes base64 UTF-8" 'Prüfung' "$(subject_shown '=?UTF-8?B?UHLDvGZ1bmc=?=')"
+check "decodes Latin-1" 'Prüfung' "$(subject_shown '=?iso-8859-1?Q?Pr=FCfung?=')"
+check "joins adjacent encoded words" 'Prüfung äöü' \
+    "$(subject_shown '=?utf-8?Q?Pr=C3=BCfung_?= =?utf-8?Q?=C3=A4=C3=B6=C3=BC?=')"
+check "keeps text around an encoded word" 'Scan für Empfang (2)' \
+    "$(subject_shown 'Scan =?utf-8?Q?f=C3=BCr?= Empfang (2)')"
+check "leaves a plain subject alone" 'Scan 100% = done_now' "$(subject_shown 'Scan 100% = done_now')"
+check "keeps a word in an unknown charset" '=?no-such-charset?Q?abc?=' \
+    "$(subject_shown '=?no-such-charset?Q?abc?=')"
+check "keeps a word that is invalid in its charset" '=?utf-8?Q?=FF?=' "$(subject_shown '=?utf-8?Q?=FF?=')"
+check "control characters can't add lines to the notice" 'a b' "$(subject_shown '=?utf-8?Q?a=0Ab?=')"
+
 echo 403 > "$TMP/status"
 run_notice MAILER-DAEMON
 check "refused notice exits 69" "69" "$(cat "$TMP/exit")"
