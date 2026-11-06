@@ -162,6 +162,25 @@ A mapped message appears in the log twice: under its first queue ID with
 The From/sender address on the printer must be one of `config/allowed_senders`,
 unless the printer has a mapped mailbox (step 3a).
 
+**TLS** is offered on ports 25 and 587 through STARTTLS, and is optional:
+
+- **Certificate:** the relay uses a self-signed certificate by default, and a
+  printer that checks certificates will refuse it. Put a real one in
+  `config/tls/cert.pem` and `key.pem`, with a name matching the address the printer
+  connects to. If that isn't possible, import the self-signed certificate on the
+  printer or turn off its certificate check. The certificate is read at startup, so
+  run `docker compose restart` after renewing it.
+- **Port 465 is not available:** a printer that only offers implicit TLS ("SSL/TLS"
+  rather than STARTTLS) can't connect.
+- **Versions:** TLS 1.0 and newer are accepted, because older printers may not
+  support anything newer.
+- **Which printers use TLS:** each TLS connection logs a line. A client with no
+  such line sent in plain text.
+
+  ```bash
+  docker compose logs | grep 'TLS connection established'
+  ```
+
 ### 5. Updating
 
 ```bash
@@ -228,7 +247,7 @@ and the running relay is left as it was:
 | `config/trusted_networks` | Optional IPs/CIDRs that may relay without authentication (one per line) |
 | `config/client_accounts` | Optional `user password` lines for SASL accounts |
 | `config/client_senders` | Optional `client mailbox` lines giving a printer its own sender (step 3a) |
-| `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise) |
+| `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise, see step 4) |
 | `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
 | `scripts/outbound-graph.sh` / `scripts/outbound-smtp.sh` | Outbound-mode adapters: each owns its mode's Postfix config, aux services, OAuth scope, and token store |
 | `scripts/graph-send.sh` | graph mode pipe transport: posts one queued message to Graph `sendMail` |

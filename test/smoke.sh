@@ -42,6 +42,16 @@ smtp_dialogue() {
     fi
 }
 
+# smtp_dialogue_tls <port> <smtp-command>...
+# The same dialogue over STARTTLS, from an IP that is NOT whitelisted. Uses the
+# relay's own image, because busybox has no openssl.
+smtp_dialogue_tls() {
+    local port=$1; shift
+    docker run --rm -i --network "${PROJECT}_default" -e SMTP_STARTTLS=1 --entrypoint sh \
+        "$(docker inspect --format '{{.Image}}' "$RELAY")" \
+        -s -- relay "$port" "$@" < test/smtp-dialogue.sh
+}
+
 boot_stack() { # boot_stack <mode> [fixture-dir, relative to test/]
     PROJECT="postfix-oauth-test-$1"
     COMPOSE="docker compose -p $PROJECT -f test/compose.$1.test.yml"
@@ -77,6 +87,26 @@ inbound_suite() { # the access policy must hold identically in both modes
 
     out=$(smtp_dialogue remote 587 "AUTH PLAIN $auth" 'MAIL FROM:<evil@nowhere.com>' 'RCPT TO:<user@example.org>')
     check "whitelist also binds authenticated clients" '554 5\.7\.1 .*Sender address rejected' "$out"
+
+    out=$(smtp_dialogue_tls 587 "AUTH PLAIN $auth" 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@example.org>')
+    check "STARTTLS on 587: account authenticates inside TLS" '235 2\.7\.0' "$out"
+    check "STARTTLS on 587: authenticated printer may relay" '250 2\.1\.5' "$out"
+
+    out=$(smtp_dialogue_tls 25 "AUTH PLAIN $auth" 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@example.org>')
+    check "STARTTLS on 25: authenticated printer may relay" '250 2\.1\.5' "$out"
+
+    check_tls_logged 'postfix/smtpd' "the log shows TLS use on 25"
+    check_tls_logged 'postfix/submission/smtpd' "the log shows TLS use on 587"
+}
+
+check_tls_logged() { # check_tls_logged <syslog name> <check name>: log lines arrive a moment late
+    local pattern="$1\[[0-9]+\]: .*TLS connection established from .*TLSv1" logs=""
+    for _ in $(seq 1 10); do
+        logs=$(docker logs "$RELAY" 2>&1)
+        printf '%s\n' "$logs" | grep -qE "$pattern" && break
+        sleep 1
+    done
+    check "$2" "$pattern" "$logs"
 }
 
 auth_plain() { # auth_plain <account>: base64 credentials for AUTH PLAIN

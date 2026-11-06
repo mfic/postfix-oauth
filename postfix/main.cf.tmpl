@@ -39,6 +39,8 @@ smtpd_tls_security_level = may
 smtpd_tls_cert_file = /etc/postfix/cert.pem
 smtpd_tls_key_file = /etc/postfix/key.pem
 smtpd_tls_auth_only = no
+# log one line per TLS connection, so the log shows which clients use TLS
+smtpd_tls_loglevel = 1
 
 # outbound (us -> Microsoft 365): the outbound-<OUTBOUND_MODE>.sh adapter
 # appends its transport settings here at container start.

@@ -11,6 +11,10 @@
 # netcat-openbsd) and the busybox helper. smoke.sh pipes it into `sh -s`:
 #
 #   sh -s -- <host> <port> <smtp-command>... < smtp-dialogue.sh
+#
+# With SMTP_STARTTLS=1 the dialogue runs inside TLS, through openssl. A failed
+# handshake gives an empty transcript. busybox has no openssl, so this needs the
+# relay image. openssl handles the greeting and the first EHLO itself.
 set -u
 
 host=$1; port=$2; shift 2
@@ -20,7 +24,12 @@ mkdir "$dir" || exit 1
 trap 'exec 3>&- 4<&- 2>/dev/null; rm -rf "$dir"' EXIT
 mkfifo "$dir/in" "$dir/out"
 
-nc -w 15 "$host" "$port" < "$dir/in" > "$dir/out" &
+if [ "${SMTP_STARTTLS:-}" = 1 ]; then
+    timeout 15 openssl s_client -quiet -starttls smtp -connect "$host:$port" \
+        < "$dir/in" > "$dir/out" 2>/dev/null &
+else
+    nc -w 15 "$host" "$port" < "$dir/in" > "$dir/out" &
+fi
 exec 3> "$dir/in" 4< "$dir/out"
 
 send() { printf '%s\r\n' "$1" >&3; }
@@ -38,7 +47,7 @@ reply() {
     return 1
 }
 
-reply || exit 1        # greeting
+[ "${SMTP_STARTTLS:-}" = 1 ] || reply || exit 1        # greeting
 send "EHLO smoketest"
 reply || exit 1
 
