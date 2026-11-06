@@ -5,11 +5,11 @@
 # stdout and exits 0; on failure logs the error response (token redacted) to
 # stderr and exits 1.
 #
-# TOKEN_ENDPOINT can be overridden, e.g. to test against a mock endpoint.
+# TOKEN_ENDPOINT and OUTBOUND_ADAPTER_DIR can be overridden, e.g. for tests.
 set -u
 
 mode="${1:?usage: fetch-token.sh <outbound-mode>}"
-adapter="/usr/local/bin/outbound-${mode}.sh"
+adapter="${OUTBOUND_ADAPTER_DIR:-/usr/local/bin}/outbound-${mode}.sh"
 
 TOKEN_ENDPOINT="${TOKEN_ENDPOINT:-https://login.microsoftonline.com/${TENANT_ID}/oauth2/v2.0/token}"
 
