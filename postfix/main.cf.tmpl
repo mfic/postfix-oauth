@@ -23,6 +23,7 @@ smtpd_relay_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
 smtpd_recipient_restrictions = permit_mynetworks, permit_sasl_authenticated, reject
 # sender whitelist applies to EVERYONE, including whitelisted IPs and
 # authenticated printers: unknown MAIL FROM -> 550
+# (entries in config/client_senders extend this list at container start)
 smtpd_sender_restrictions = check_sender_access hash:/etc/postfix/allowed_senders, reject
 
 # optional username/password auth for printers (sasldb, enabled on 25 and 587)

@@ -115,6 +115,86 @@ else
     echo "FAIL: original body preserved when Bcc is added"; fail=$((fail+1))
 fi
 
+# bcc_of <mime> <recipient>... - the Bcc header Graph receives for this message
+bcc_of() {
+    MIME=$1; shift
+    run_send printers@example.com "$@"
+    req_field body | base64 -d 2>/dev/null | sed '/^\r\{0,1\}$/q' | grep -i '^Bcc:' | tr -d '\r'
+}
+FROM=$'From: printers@example.com\r\n'
+BODY=$'Subject: scan\r\n\r\nhello\r\n'
+
+# --- only a whole address in To/Cc counts as present ----------------------
+check "address that is a substring of a To address stays in Bcc" \
+    "Bcc: a@x.de" "$(bcc_of "${FROM}To: aa@x.de"$'\r\n'"$BODY" aa@x.de a@x.de)"
+check "address found only in From stays in Bcc" \
+    "Bcc: printers@example.com" \
+    "$(bcc_of "${FROM}To: user@example.org"$'\r\n'"$BODY" user@example.org printers@example.com)"
+check "address found only in Subject stays in Bcc" \
+    "Bcc: a@x.de" \
+    "$(bcc_of "${FROM}To: user@example.org"$'\r\n'$'Subject: for a@x.de\r\n\r\nhello\r\n' user@example.org a@x.de)"
+check "address found only in a display name stays in Bcc" \
+    "Bcc: a@x.de" \
+    "$(bcc_of "${FROM}To: \"a@x.de\" <user@example.org>"$'\r\n'"$BODY" user@example.org a@x.de)"
+check "To match ignores case" "" \
+    "$(bcc_of "${FROM}To: User@Example.ORG"$'\r\n'"$BODY" user@example.org)"
+check "folded To and Cc addresses count as present" "" \
+    "$(bcc_of "${FROM}To: Some One <one@x.de>,"$'\r\n'$' two@x.de\r\nCc: three@x.de\r\n'"$BODY" one@x.de two@x.de three@x.de)"
+check "an existing Bcc header is replaced by one complete header" \
+    "Bcc: old@x.de, new@x.de" \
+    "$(bcc_of "${FROM}To: user@example.org"$'\r\nBcc: old@x.de\r\n'"$BODY" user@example.org old@x.de new@x.de)"
+MIME=$'From: printers@example.com\r\nTo: user@example.org\r\nSubject: scan\r\n\r\nhello scan\r\n'
+
+# --- oversized messages fail visibly ---------------------------------------
+echo 413 > "$TMP/status"
+run_send printers@example.com user@example.org
+check "413 bounces (exit 69)" "69" "$(cat "$TMP/exit")"
+if grep -q 'MESSAGE TOO LARGE.*message [0-9]* bytes, request [0-9]* bytes' "$TMP/stderr"; then
+    echo "PASS: 413 is logged as too large, with the sizes"; pass=$((pass+1))
+else
+    echo "FAIL: 413 is logged as too large, with the sizes: $(cat "$TMP/stderr")"; fail=$((fail+1))
+fi
+echo 202 > "$TMP/status"
+
+# --- Postfix's own notices are reported, never posted to Graph -------------
+before=$(grep -c sendMail "$TMP/requests.jsonl")
+NOTICE=$'From: MAILER-DAEMON@relay\r\nTo: printers@example.com\r\nSubject: Undelivered\r\n\r\nX-Postfix-Queue-ID: ABC123\r\nFinal-Recipient: rfc822; user@example.org\r\n'
+for notice_sender in MAILER-DAEMON double-bounce@relay.example.com; do
+    MIME=$NOTICE
+    run_send "$notice_sender" printers@example.com
+    check "$notice_sender notice exits 69 so that Postfix logs it" "69" "$(cat "$TMP/exit")"
+    if grep -q 'FAILURE NOTICE NOT SENT to printers@example.com.*ABC123.*user@example.org' "$TMP/stderr"; then
+        echo "PASS: $notice_sender notice is logged with what failed"; pass=$((pass+1))
+    else
+        echo "FAIL: $notice_sender notice is logged with what failed: $(cat "$TMP/stderr")"; fail=$((fail+1))
+    fi
+done
+check "notices never reach Graph" "$before" "$(grep -c sendMail "$TMP/requests.jsonl")"
+rm -f "$TMP/token"
+run_send MAILER-DAEMON printers@example.com
+check "notice is reported even without a token" "69" "$(cat "$TMP/exit")"
+printf '%s' "test-token-123" > "$TMP/token"
+
+# --- graph-size-test.sh reports what Graph accepts --------------------------
+printf '#!/bin/bash\nexec bash scripts/graph-send.sh "$@"\n' > "$TMP/graph-send"
+chmod +x "$TMP/graph-send"
+size_test() {
+    TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
+    GRAPH_SEND="$TMP/graph-send" \
+        bash scripts/graph-size-test.sh printers@example.com user@example.org 1 2 2>&1
+}
+echo 2500000 > "$TMP/max_body"   # 1 MB attachment fits, 2 MB does not
+out=$(size_test); code=$?
+check "size test fails when a size is refused" "1" "$code"
+case "$out" in
+    *"1 MB attachment"*"accepted by Graph"*"2 MB attachment"*"NOT ACCEPTED"*"MESSAGE TOO LARGE"*)
+        echo "PASS: size test reports each size and the reason"; pass=$((pass+1)) ;;
+    *) echo "FAIL: size test reports each size and the reason:"; printf '%s\n' "$out"; fail=$((fail+1)) ;;
+esac
+rm -f "$TMP/max_body"
+out=$(size_test); code=$?
+check "size test passes when every size is accepted" "0" "$code"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

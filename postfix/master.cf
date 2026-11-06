@@ -31,3 +31,6 @@ postlog    unix-dgram n  -       n       -       1       postlogd
 # outbound delivery: one Graph sendMail POST per message (see main.cf)
 graph      unix  -       n       n       -       10      pipe
   user=nobody argv=/usr/local/bin/graph-send.sh ${sender} ${recipient}
+# per-client mailboxes: the FILTER nexthop carries the mailbox (config/client_senders)
+sender-rewrite unix -    n       n       -       10      pipe
+  user=nobody argv=/usr/local/bin/sender-rewrite.sh ${nexthop} ${recipient}

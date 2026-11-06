@@ -1,0 +1,11 @@
+# Optional per-client mailboxes: "<ip-or-cidr|account> <mailbox>" per line.
+# A listed client always sends as its mailbox: the envelope sender and From
+# header are overwritten, whatever the printer has configured. Clients not
+# listed here choose any sender from allowed_senders, as usual.
+# Each mailbox must be in allowed_senders, each account in printer_accounts.
+# If both match, the account wins. Among IP entries the first match wins, so
+# list single IPs before the networks containing them. This file grants no
+# relay access: an IP must also be in PRINTER_NETWORKS unless it authenticates.
+# Copy to config/client_senders and edit. Delete/leave empty to disable.
+192.168.10.21    scanner@example.com
+printer-lobby    printers@example.com

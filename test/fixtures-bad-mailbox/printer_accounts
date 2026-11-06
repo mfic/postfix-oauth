@@ -1,0 +1,3 @@
+# Test fixture: printer-lobby has a mapped mailbox, printer-free does not
+printer-lobby TestSecret123!
+printer-free TestSecret123!
