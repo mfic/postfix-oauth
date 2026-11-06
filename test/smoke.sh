@@ -183,22 +183,22 @@ mapped_policy_suite() {
 }
 
 # A bad config line must stop the relay: skipped, it would let the client choose
-# its own sender. Runs the entrypoint only, so no stack needs to be up.
+# its own sender. Runs the entrypoint only, so no stack needs to be up. One bad
+# file for each of the entrypoint's two calls to config-tables.sh, the first of
+# them inside a command substitution; test/config.test.sh has every other rule.
 run_entrypoint() {
     timeout 180 docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml \
         run --build -T --rm --no-deps relay 2>&1
 }
 bad_config_suite() {
-    local name expected out
-    for name in bad-mailbox:'client_senders: .*not in allowed_senders' \
-        bad-account:'client_senders: .*not in client_accounts' \
-        bad-ip:'client_senders: invalid IP entry' \
-        bad-network:'trusted_networks: invalid entry' \
-        bad-network-name:'trusted_networks: .*not an IP or CIDR' \
-        bad-network-all:'trusted_networks: .*would trust every address'; do
+    local name expected out status
+    for name in bad-network:'trusted_networks: invalid entry' \
+        bad-mailbox:'client_senders: .*not in allowed_senders'; do
         expected=${name#*:}
         out=$(FIXTURES="./fixtures-${name%%:*}" run_entrypoint)
+        status=$?
         check "boot refuses ${name%%:*}" "FATAL: /config/$expected" "$out"
+        check "boot stops at ${name%%:*}" '^1$' "$status"
     done
     out=$(FIXTURES=./fixtures FAILURE_NOTICE_MAILBOX=notices@example.com run_entrypoint)
     check "boot refuses a notice mailbox without a sender" 'FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together' "$out"

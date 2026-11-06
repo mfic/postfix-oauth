@@ -26,10 +26,9 @@ EOF
 
     # A half-configured or malformed setting would only show up when a message
     # fails, so stop now. The values also end up in a file graph-send.sh sources.
-    mailbox_pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$'
     for value in "${FAILURE_NOTICE_MAILBOX:-}" "${FAILURE_NOTICE_SENDER:-}"; do
         if [ -n "${FAILURE_NOTICE_MAILBOX:-}${FAILURE_NOTICE_SENDER:-}" ] \
-            && ! [[ "$value" =~ $mailbox_pattern ]]; then
+            && ! /usr/local/bin/config-tables.sh is-mailbox "$value"; then
             echo "FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together, as mailbox addresses" >&2
             exit 1
         fi

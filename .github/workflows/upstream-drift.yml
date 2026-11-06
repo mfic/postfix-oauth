@@ -32,6 +32,9 @@ jobs:
       - name: Unit tests (sender-rewrite)
         run: bash ./test/sender-rewrite.test.sh
 
+      - name: Config tests (in the relay image)
+        run: bash ./test/config.test.sh
+
       - name: Smoke test (both outbound modes)
         run: ./test/smoke.sh
 

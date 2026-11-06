@@ -328,6 +328,7 @@ and the running relay is left as it was:
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise, see step 4) |
 | `cloudflare.ini` | Optional Cloudflare token for the Let's Encrypt sidecar (step 4a), mounted only into the sidecar |
 | `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
+| `scripts/config-tables.sh` | The one reader of `config/`: checks each file and turns it into Postfix tables, SASL accounts and the sender policy |
 | `scripts/outbound-graph.sh` / `scripts/outbound-smtp.sh` | Outbound-mode adapters: each owns its mode's Postfix config, aux services, OAuth scope, and token store |
 | `scripts/graph-send.sh` | graph mode pipe transport: posts one queued message to Graph `sendMail` |
 | `scripts/graph-size-test.sh` | graph mode: sends real test mails to find which scan sizes Microsoft accepts |
@@ -444,6 +445,11 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   against a local mock endpoint (needs bash, curl, python3).
 - `./test/sender-rewrite.test.sh` — unit tests for the sender rewrite, with a
   stub `sendmail`.
+- `./test/config.test.sh` — tests for the config reader, with each case's files
+  written inline: the tables, the SASL accounts and every FATAL, including CRLF,
+  a missing final newline and comment-only files. Needs Docker: it builds the
+  relay image and runs in one throwaway container, with no stack, because
+  `postmap` and `saslpasswd2` exist only there.
 - `./test/smtp-dialogue.sh` — response-driven SMTP driver used by the smoke
   test (each command is sent when the previous reply completes; no sleeps).
 - `./test/smoke.sh` — boots an isolated stack per outbound mode (mock
@@ -453,7 +459,9 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   modes. In graph mode an accepted message is additionally followed
   end-to-end to the mock Graph `sendMail` endpoint; the real
   `smtp.office365.com` leg of smtp mode needs real credentials and is not
-  covered. Separate stacks cover per-client mailboxes: followed to the mock Graph
+  covered. A bad config file is shown to stop a real boot, for each of the
+  entrypoint's two calls to the config reader; `config.test.sh` has every other
+  rule. Separate stacks cover per-client mailboxes: followed to the mock Graph
   in graph mode, and to the queue, with delivery held, in smtp mode. Further stacks
   cover TLS certificates: your own, renewed on disk, and the real certbot sidecar
   against Pebble, Let's Encrypt's test server, with a mock Cloudflare API
@@ -478,7 +486,7 @@ message's content and with it attached.
 
 ### Continuous checks
 
-- **`.github/workflows/ci.yml`** — runs shellcheck and both test scripts on
+- **`.github/workflows/ci.yml`** — runs shellcheck and the test scripts on
   every push to `main` and every pull request.
 - **`.github/workflows/upstream-drift.yml`** — weekly, and on demand: rebuilds
   the image with `--no-cache --pull` and runs the same tests. The repo does not
@@ -530,6 +538,8 @@ both modes:
   `config/allowed_senders`.
 - `FATAL: /config/client_senders: ...` or `FATAL: /config/trusted_networks: ...` at
   startup → fix the named line.
+- `FATAL: /config/allowed_senders ...` at startup → the file holds no address, so
+  the relay would reject every sender.
 - `554 5.5.0 Error: SMTP protocol synchronization` → the client sent before the
   relay's reply arrived: before the banner, or commands together before `EHLO`
   offered PIPELINING. This is Postfix's default protection
