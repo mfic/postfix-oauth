@@ -393,8 +393,9 @@ boot_stack graph
 for port in 25 587; do
     check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.0" '^accepted TLSv1$' "$(tls_probe "$port" tls1)"
     check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.1" '^accepted TLSv1\.1$' "$(tls_probe "$port" tls1_1)"
-    # the suite a real older printer used over TLS 1.0
+    # the two suites real older printers used over TLS 1.0
     check "with TLS_MIN_VERSION=TLSv1, $port accepts ECDHE-RSA-AES256-SHA" '^accepted TLSv1$' "$(tls_probe "$port" tls1 ECDHE-RSA-AES256-SHA)"
+    check "with TLS_MIN_VERSION=TLSv1, $port accepts AES256-SHA" '^accepted TLSv1$' "$(tls_probe "$port" tls1 AES256-SHA)"
     check "with TLS_MIN_VERSION=TLSv1, $port still refuses anonymous ciphers" '^refused$' "$(tls_probe "$port" tls1 aNULL)"
     check "with TLS_MIN_VERSION=TLSv1, $port still gives a modern client TLS 1.3" '^accepted TLSv1\.3$' "$(docker exec "$RELAY" sh -c "echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:$port 2>&1" | sed -n 's/^ *Protocol *: *//p' | head -1 | tr -d '\r' | sed 's/^/accepted /')"
 done
