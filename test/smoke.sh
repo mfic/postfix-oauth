@@ -134,7 +134,7 @@ run_entrypoint() {
 bad_config_suite() {
     local name expected out
     for name in bad-mailbox:'client_senders: .*not in allowed_senders' \
-        bad-account:'client_senders: .*not in printer_accounts' \
+        bad-account:'client_senders: .*not in client_accounts' \
         bad-ip:'client_senders: invalid IP entry' \
         bad-network:'trusted_networks: invalid entry' \
         bad-network-name:'trusted_networks: .*not an IP or CIDR' \
@@ -154,6 +154,7 @@ inbound_suite
 healthcheck_suite graph
 
 out=$(docker exec "$RELAY" postconf -h smtpd_sender_restrictions)
+check "boot log shows when no network is trusted" 'Loaded 0 trusted network\(s\)' "$(docker logs "$RELAY" 2>&1)"
 check "without a mapping the sender policy is the plain whitelist" \
     '^check_sender_access hash:/etc/postfix/allowed_senders, reject$' "$out"
 
@@ -207,9 +208,12 @@ out=$(smtp_dialogue remote 25 'MAIL FROM:<printers@example.com>' 'RCPT TO:<user@
 check "client in trusted_networks relays without auth" '250 2\.1\.5' "$out"
 out=$(smtp_dialogue remote 25 'MAIL FROM:<evil@nowhere.com>' 'RCPT TO:<user@example.org>')
 check "trusted network stays bound by the whitelist" '554 5\.7\.1 .*Sender address rejected' "$out"
+out=$(smtp_dialogue remote 587 "AUTH PLAIN $(auth_plain printer-test)")
+check "older printer_accounts file still counts" '235 2\.7\.0' "$out"
 out=$(docker exec "$RELAY" postconf -h mynetworks)
 check "IPv6 entry is written in brackets" '\[2001:db8::\]/32' "$out"
 check "older PRINTER_NETWORKS still counts" '198\.51\.100\.0/24' "$out"
+check "boot log counts file and PRINTER_NETWORKS entries" 'Loaded 6 trusted network\(s\)' "$(docker logs "$RELAY" 2>&1)"
 if printf '%s\n' "$out" | grep -q 'printer\|#'; then
     check "comments stay out of mynetworks" 'absent' 'present'
 else

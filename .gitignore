@@ -1,6 +1,7 @@
 .env
 config/allowed_senders
 config/printer_accounts
+config/client_accounts
 config/client_senders
 config/trusted_networks
 config/tls/

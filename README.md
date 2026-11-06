@@ -112,7 +112,7 @@ Add-RecipientPermission scanner@example.com -Trustee printers@example.com -Acces
 cp .env.example .env                                    # fill in tenant/client/secret
 cp config/allowed_senders.example config/allowed_senders
 cp config/trusted_networks.example config/trusted_networks   # optional
-cp config/printer_accounts.example config/printer_accounts   # optional
+cp config/client_accounts.example config/client_accounts     # optional
 cp config/client_senders.example config/client_senders       # optional, see 3a
 
 docker compose -f docker-compose.graph.yml up -d --build     # graph mode
@@ -138,7 +138,7 @@ printer-lobby    printers@example.com
   `allowed_senders`. With no entries the relay's policy is unchanged.
 - If both an IP and an account match, the account wins. Among IP entries, the
   first match wins.
-- Each mailbox must be in `allowed_senders`, each account in `printer_accounts`,
+- Each mailbox must be in `allowed_senders`, each account in `client_accounts`,
   and an IP must be a valid address or CIDR. Otherwise the relay refuses to
   start, because a skipped line would let that client choose its own sender.
 - The file grants no relay access: a listed IP still has to be in
@@ -157,7 +157,7 @@ A mapped message appears in the log twice: under its first queue ID with
 | Printer capability | Settings |
 |---|---|
 | No auth (IP in `config/trusted_networks`) | SMTP server = relay IP, port 25, no auth, no TLS needed |
-| Username/password | Port 587 (or 25), STARTTLS if supported, PLAIN/LOGIN with an account from `config/printer_accounts` |
+| Username/password | Port 587 (or 25), STARTTLS if supported, PLAIN/LOGIN with an account from `config/client_accounts` |
 
 The From/sender address on the printer must be one of `config/allowed_senders`,
 unless the printer has a mapped mailbox (step 3a).
@@ -226,7 +226,7 @@ and the running relay is left as it was:
 | `docker-compose.graph.yml` / `docker-compose.smtp.yml` | Same relay, outbound mode baked in via `OUTBOUND_MODE` |
 | `config/allowed_senders` | Sender whitelist (one address per line) — **required** |
 | `config/trusted_networks` | Optional IPs/CIDRs that may relay without authentication (one per line) |
-| `config/printer_accounts` | Optional `user password` lines for SASL accounts |
+| `config/client_accounts` | Optional `user password` lines for SASL accounts |
 | `config/client_senders` | Optional `client mailbox` lines giving a printer its own sender (step 3a) |
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise) |
 | `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
@@ -242,6 +242,9 @@ Docker only reads that file when it creates the container.
 
 `PRINTER_NETWORKS` in `.env`, the older form of `config/trusted_networks`, still
 works, and entries from both count. It is not validated, so prefer the file.
+`config/printer_accounts`, the older name of `config/client_accounts`, also still
+works, and accounts from both count. If a username is in both, `client_accounts`
+wins.
 
 ## Delivery semantics (graph mode)
 
@@ -297,6 +300,11 @@ FAILURE_NOTICE_SENDER=no-reply@example.com    # sends them
 ```bash
 docker compose logs postfix | grep -E 'status=bounced|FAILURE NOTICE'
 ```
+
+A notice that was sent shows up in the log as `from=<>` and `status=sent`, with the
+**failed message's sender** in `to=`, not `FAILURE_NOTICE_MAILBOX`. The relay swaps
+the recipient after Postfix logs that address, so check the mailbox itself to confirm
+arrival.
 
 Postfix's notices to the postmaster are only ever logged, because their SMTP
 transcript can contain printer credentials.

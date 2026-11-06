@@ -42,17 +42,23 @@ grep -Ev '^\s*(#|$)' /config/allowed_senders \
     | awk '{print tolower($1), "OK"}' > /etc/postfix/allowed_senders
 postmap hash:/etc/postfix/allowed_senders
 
-# ------------------------------------------- optional per-printer accounts
-# /config/printer_accounts: lines of "username password" -> SASL logins
+# --------------------------------------------------- optional client accounts
+# /config/client_accounts: lines of "username password" -> SASL logins.
+# printer_accounts is the older name of this file and still counts; if a username
+# is in both, client_accounts wins.
+account_files=()
+for file in /config/printer_accounts /config/client_accounts; do
+    [ -s "$file" ] && account_files+=("$file")
+done
 rm -f /etc/sasldb2
-if [ -s /config/printer_accounts ]; then
+if [ "${#account_files[@]}" -gt 0 ]; then
     while read -r user pass _; do
         case "$user" in ''|\#*) continue ;; esac
         printf '%s' "$pass" | saslpasswd2 -p -c -u "$POSTFIX_HOSTNAME" "$user"
-    done < /config/printer_accounts
+    done < <(cat "${account_files[@]}")
     chown postfix:sasl /etc/sasldb2 2>/dev/null || chown postfix /etc/sasldb2
     chmod 640 /etc/sasldb2
-    echo "Loaded $(sasldblistusers2 | wc -l) printer SASL account(s)."
+    echo "Loaded $(sasldblistusers2 | wc -l) SASL client account(s)."
 fi
 
 # ------------------------------------------------------- trusted networks
@@ -87,6 +93,7 @@ if [ -f /config/trusted_networks ]; then
     rm -f "$check_table"
 fi
 export TRUSTED_NETWORKS
+echo "Loaded $(printf '%s' "$TRUSTED_NETWORKS" | wc -w) trusted network(s)."
 
 # ------------------------------------------------- render config templates
 envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${TRUSTED_NETWORKS}' \
@@ -120,8 +127,8 @@ if [ -f /config/client_senders ] && grep -qEv '^\s*(#|$)' /config/client_senders
             printf '%s FILTER sender-rewrite:%s\n' "$client" "$mailbox" >> /etc/postfix/client_sender_filter.cidr
             printf '%s OK\n' "$client" >> /etc/postfix/client_sender_accept.cidr
         else
-            [ -f /config/printer_accounts ] && awk -v u="$client" '$1 == u { found = 1 } END { exit !found }' /config/printer_accounts \
-                || client_senders_fail "account '$client' is not in printer_accounts"
+            [ "${#account_files[@]}" -gt 0 ] && awk -v u="$client" '$1 == u { found = 1 } END { exit !found }' "${account_files[@]}" \
+                || client_senders_fail "account '$client' is not in client_accounts"
             # smtpd_sasl_local_domain makes Postfix see the login as user@hostname
             printf '%s@%s FILTER sender-rewrite:%s\n' "$client" "$POSTFIX_HOSTNAME" "$mailbox" >> /etc/postfix/client_sender_filter_accounts
             printf '%s@%s OK\n' "$client" "$POSTFIX_HOSTNAME" >> /etc/postfix/client_sender_accept_accounts
