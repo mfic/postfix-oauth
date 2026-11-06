@@ -35,6 +35,23 @@ EOF
         fi
     done
 
+    case "${FAILURE_NOTICE_ATTACH_MESSAGE:-}" in
+        '') ;;
+        yes)
+            if [ -z "${FAILURE_NOTICE_MAILBOX:-}" ]; then
+                echo "FATAL: FAILURE_NOTICE_ATTACH_MESSAGE needs FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER" >&2
+                exit 1
+            fi
+            # A bounce normally keeps only the first 50 KB of the failed message
+            echo "bounce_size_limit = $(postconf -h message_size_limit)" >> /etc/postfix/main.cf
+            ;;
+        no) ;;
+        *)
+            echo "FATAL: FAILURE_NOTICE_ATTACH_MESSAGE must be yes or no, got '$FAILURE_NOTICE_ATTACH_MESSAGE'" >&2
+            exit 1
+            ;;
+    esac
+
     # Postfix scrubs the environment of pipe(8) commands, so graph-send.sh
     # reads its settings from this file.
     mkdir -p /etc/postfix-relay
@@ -43,6 +60,7 @@ GRAPH_ENDPOINT=${GRAPH_ENDPOINT:-https://graph.microsoft.com/v1.0}
 TOKEN_FILE=${TOKEN_FILE}
 FAILURE_NOTICE_MAILBOX=${FAILURE_NOTICE_MAILBOX:-}
 FAILURE_NOTICE_SENDER=${FAILURE_NOTICE_SENDER:-}
+FAILURE_NOTICE_ATTACH_MESSAGE=${FAILURE_NOTICE_ATTACH_MESSAGE:-}
 EOF
     ;;
 

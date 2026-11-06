@@ -221,6 +221,60 @@ else
     echo "PASS: original sender is not added as Bcc"; pass=$((pass+1))
 fi
 
+# --- optionally the failed message is attached --------------------------------
+run_attached() {
+    MIME=$NOTICE
+    printf '%s' "$MIME" | \
+        TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
+        FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com \
+        FAILURE_NOTICE_ATTACH_MESSAGE=yes \
+        bash scripts/graph-send.sh MAILER-DAEMON printers@example.com 2>"$TMP/stderr"
+    echo "$?" > "$TMP/exit"
+}
+has_text() { # has_text <name> <text>: the last request's decoded body contains it
+    if grep -qF "$2" "$TMP/decoded"; then
+        echo "PASS: $1"; pass=$((pass+1))
+    else
+        echo "FAIL: $1"; fail=$((fail+1))
+    fi
+}
+lacks_text() { # lacks_text <name> <text>
+    if grep -qF "$2" "$TMP/decoded"; then
+        echo "FAIL: $1"; fail=$((fail+1))
+    else
+        echo "PASS: $1"; pass=$((pass+1))
+    fi
+}
+run_attached
+check "attached notice exits 0" "0" "$(cat "$TMP/exit")"
+req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
+has_text "attached notice is multipart/mixed" 'Content-Type: multipart/mixed'
+lacks_text "attached notice is not a multipart/report" 'multipart/report'
+has_text "attached notice names the attachment" 'filename="failed-message.eml"'
+has_text "attachment holds the failed message" 'SCAN CONTENT MARKER'
+has_text "attachment keeps the failed message's headers" 'Subject: Scan from'
+lacks_text "attachment leaves out the delivery report" 'Reporting-MTA'
+has_text "attached notice still gives the failure" 'HTTP 403 from Graph'
+check "attached notice has one top-level recipient" "To: notices@example.com" \
+    "$(sed '/^$/q' "$TMP/decoded" | grep -i '^To:')"
+
+# A failure the attachment can't survive: refused with it, delivered without it
+requests_before=$(grep -c sendMail "$TMP/requests.jsonl")
+echo 1200 > "$TMP/max_body"
+run_attached
+rm -f "$TMP/max_body"
+check "notice refused with its attachment still gets through" "0" "$(cat "$TMP/exit")"
+check "that takes exactly one more request" "$((requests_before + 2))" "$(grep -c sendMail "$TMP/requests.jsonl")"
+req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
+lacks_text "the retry drops the attachment" 'SCAN CONTENT MARKER'
+has_text "the retry says why" 'could not be attached: Graph refused the notice with it,'
+has_text "the retry gives Graph's status" 'HTTP 413'
+
+echo 403 > "$TMP/status"
+run_attached
+check "notice refused either way exits 69" "69" "$(cat "$TMP/exit")"
+echo 202 > "$TMP/status"
+
 echo 403 > "$TMP/status"
 run_notice MAILER-DAEMON
 check "refused notice exits 69" "69" "$(cat "$TMP/exit")"

@@ -281,12 +281,18 @@ failures need somewhere to go. In graph mode, set both of these in `.env`:
 ```bash
 FAILURE_NOTICE_MAILBOX=it@example.com         # receives the notices
 FAILURE_NOTICE_SENDER=no-reply@example.com    # sends them
+FAILURE_NOTICE_ATTACH_MESSAGE=no              # optional, yes attaches the failed message
 ```
 
 - The sender must be a mailbox in the app's scope (step 2a). It doesn't need to be
   in `allowed_senders`. The recipient can be any address.
 - A notice is plain text with the queue ID, sender, subject, failed recipients and
-  failure reason, including Graph's error. It never contains the message's content.
+  failure reason, including Graph's error. It contains the message's content only
+  with `FAILURE_NOTICE_ATTACH_MESSAGE=yes`.
+- With that setting, the failed message is attached as `failed-message.eml`, so the
+  recipient sees any scans it contains. If Graph refuses the notice with the
+  attachment, for example because the message was too large, the relay sends the
+  notice again without it and says so in the text.
   Plain text is required: in a live test, Graph accepted Postfix's usual
   `multipart/report` bounce format, but Exchange routed it back to the sending
   mailbox's Inbox instead of its recipient. So a `2xx` from Graph, or a copy in Sent
@@ -353,14 +359,15 @@ Microsoft does with it. **Not yet proven against a real tenant:**
 - attachments above 10 MB, and the status code Graph uses to refuse by size
 - a From naming a second mailbox inside the app's scope
 - a real printer as the client
-- a real relay failure producing a notice that reaches `FAILURE_NOTICE_MAILBOX`
+- a notice with `FAILURE_NOTICE_ATTACH_MESSAGE=yes` reaching its recipient
 - all of smtp mode's connection to `smtp.office365.com`, including SendAs and
   failure notices
 
 Tested live once in graph mode, on one tenant (November 2026): a send under RBAC for
 Applications with no Entra `Mail.Send` consent, refusal of a sender outside the
-scope, attachments up to 10 MB, refusal of a From outside the scope, and delivery as
-a mapped mailbox.
+scope, attachments up to 10 MB, refusal of a From outside the scope, delivery as a
+mapped mailbox, and a real failure producing a notice that arrived without the
+message's content.
 
 ### Continuous checks
 

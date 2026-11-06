@@ -16,8 +16,8 @@ case "${1:?usage: outbound-smtp.sh setup|token-scope|write-token}" in
 setup)
     : "${RELAY_MAILBOX:?RELAY_MAILBOX is required in smtp mode (the M365 mailbox Postfix authenticates as)}"
 
-    if [ -n "${FAILURE_NOTICE_MAILBOX:-}${FAILURE_NOTICE_SENDER:-}" ]; then
-        echo "WARNING: FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER only work in graph mode; ignored." >&2
+    if [ -n "${FAILURE_NOTICE_MAILBOX:-}${FAILURE_NOTICE_SENDER:-}${FAILURE_NOTICE_ATTACH_MESSAGE:-}" ]; then
+        echo "WARNING: the FAILURE_NOTICE_* settings only work in graph mode; ignored." >&2
     fi
 
     cat >> /etc/postfix/main.cf <<'EOF'

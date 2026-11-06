@@ -18,7 +18,8 @@ shift
 
 msg=$(mktemp)
 response=$(mktemp)
-trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$response"' EXIT
+attachment=""
+trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$response" "$attachment"' EXIT
 cat > "$msg"
 
 # Postfix's own notices have no mailbox to send from: bounces arrive with the
@@ -62,12 +63,13 @@ case "$sender" in
             part == 2 && /^[ \t]/ { if (found) { sub(/^[ \t]+/, " "); subject = subject $0 } next }
             part == 2 { found = (tolower($0) ~ /^subject:/); if (found) subject = substr($0, 9) }
             END { sub(/^[ \t]+/, "", subject); print subject }')
-        {
+        notice_headers=$(
             tr -d '\r' < "$msg" | sed '/^$/q' | grep -iE '^(date|message-id):'
             printf 'From: %s\nTo: %s\n' "$sender" "$1"
             printf 'Subject: Mail relay: delivery failed (%s)\n' "${original:-unknown}"
-            printf 'Auto-Submitted: auto-replied\nMIME-Version: 1.0\n'
-            printf 'Content-Type: text/plain; charset=utf-8\n\n'
+            printf 'Auto-Submitted: auto-replied\nMIME-Version: 1.0'
+        )
+        notice_text() { # notice_text <how to describe the message's content>
             printf 'A message sent through the mail relay could not be delivered, and the\n'
             printf 'relay will not retry it.\n\n'
             printf 'Queue ID: %s\n' "${original:-unknown}"
@@ -77,9 +79,43 @@ case "$sender" in
                 /^Final-Recipient:/ { sub(/^[^;]*; */, ""); print "Recipient: " $0 }
                 /^Status:/ { sub(/^[^:]*: */, ""); print "Status:    " $0 }
                 /^Diagnostic-Code:/ { sub(/^[^;]*; */, ""); print "Reason:    " $0; print "" }'
-            printf "The message's content is not included. The relay's log has more under the\n"
-            printf 'queue ID.\n'
-        } > "$msg.notice"
+            printf '%s\n' "$1"
+        }
+        write_plain_notice() { # write_plain_notice <how to describe the message's content>
+            {
+                printf '%s\nContent-Type: text/plain; charset=utf-8\n\n' "$notice_headers"
+                notice_text "$1"
+            } > "$msg.notice"
+        }
+
+        # The attachment comes from the report's message/rfc822 part. An attachment
+        # is only safe outside a multipart/report, which Exchange does not deliver.
+        attachment=""
+        if [ "${FAILURE_NOTICE_ATTACH_MESSAGE:-}" = yes ]; then
+            attachment=$(mktemp)
+            report_boundary=$(tr -d '\r' < "$msg" | sed '/^$/q' | sed -n 's/.*boundary="\([^"]*\)".*/\1/p' | head -n 1)
+            tr -d '\r' < "$msg" | awk -v end="--$report_boundary--" '
+                part == 2 && $0 == end { exit }
+                part == 2 { print; next }
+                part == 1 && /^$/ { part = 2; next }
+                /^Content-Type: message\/rfc822/ { part = 1 }' > "$attachment"
+        fi
+        if [ -s "$attachment" ]; then
+            boundary="relay-notice-${original:-unknown}-$$"
+            {
+                printf '%s\nContent-Type: multipart/mixed; boundary="%s"\n\n' "$notice_headers" "$boundary"
+                printf -- '--%s\nContent-Type: text/plain; charset=utf-8\n\n' "$boundary"
+                notice_text "The failed message is attached. The relay's log has more under the queue ID."
+                printf -- '\n--%s\nContent-Type: message/rfc822\n' "$boundary"
+                printf 'Content-Disposition: attachment; filename="failed-message.eml"\n\n'
+                cat "$attachment"
+                printf -- '\n--%s--\n' "$boundary"
+            } > "$msg.notice"
+        else
+            attachment=""
+            write_plain_notice "The message's content is not included. The relay's log has more under the
+queue ID."
+        fi
         mv -f "$msg.notice" "$msg" ;;
 esac
 
@@ -113,11 +149,27 @@ if [ -n "$bcc" ]; then
     mv -f "$msg.bcc" "$msg"
 fi
 
-status=$(base64 -w0 < "$msg" | curl -s -o "$response" -w '%{http_code}' -X POST \
-    "$GRAPH_ENDPOINT/users/$sender/sendMail" \
-    -H "Authorization: Bearer $token" \
-    -H "Content-Type: text/plain" \
-    --data-binary @-)
+post_message() {
+    status=$(base64 -w0 < "$msg" | curl -s -o "$response" -w '%{http_code}' -X POST \
+        "$GRAPH_ENDPOINT/users/$sender/sendMail" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: text/plain" \
+        --data-binary @-)
+}
+post_message
+
+# A too-large message is the likeliest failure and also the one whose notice can't
+# carry it, so a refused notice goes out once more without the attachment.
+case "$status" in
+    429) ;;
+    4*)
+        if [ -n "${attachment:-}" ]; then
+            write_plain_notice "The failed message could not be attached: Graph refused the notice with it,
+HTTP $status. The relay's log has more under the queue ID."
+            mv -f "$msg.notice" "$msg"
+            post_message
+        fi ;;
+esac
 
 # Exit codes are Postfix pipe(8) sysexits: 75 = defer and retry, 69 = bounce.
 [ "${status#2}" != "$status" ] && exit 0

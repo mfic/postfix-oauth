@@ -145,6 +145,10 @@ bad_config_suite() {
     done
     out=$(FIXTURES=./fixtures FAILURE_NOTICE_MAILBOX=notices@example.com run_entrypoint)
     check "boot refuses a notice mailbox without a sender" 'FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together' "$out"
+    out=$(FIXTURES=./fixtures FAILURE_NOTICE_ATTACH_MESSAGE=yes run_entrypoint)
+    check "boot refuses an attachment setting without a mailbox" 'FATAL: FAILURE_NOTICE_ATTACH_MESSAGE needs' "$out"
+    out=$(FIXTURES=./fixtures FAILURE_NOTICE_ATTACH_MESSAGE=maybe run_entrypoint)
+    check "boot refuses an unknown attachment setting" 'FATAL: FAILURE_NOTICE_ATTACH_MESSAGE must be yes or no' "$out"
     docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v --remove-orphans >/dev/null 2>&1
 }
 
@@ -194,6 +198,28 @@ check "failed delivery logs the notice that could not be sent" \
     'FAILURE NOTICE NOT SENT to printers@example\.com.*failed recipients user@example\.org' "$notice"
 check "failure notice is not posted to Graph" '^1$' "$(sendmail_requests | wc -l)"
 docker exec "$MOCK" sh -c 'rm -f /state/status'
+
+cleanup
+
+# ------------------------------------------- graph mode, notice with attachment
+export FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com FAILURE_NOTICE_ATTACH_MESSAGE=yes
+boot_stack graph fixtures
+unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER FAILURE_NOTICE_ATTACH_MESSAGE
+
+# about 120 KB, more than the 50 KB a bounce normally keeps. Submitted inside the
+# container, because SMTP dialogue arguments can't carry a message this long.
+docker exec "$MOCK" sh -c 'echo 403 > /state/status_once'
+docker exec "$RELAY" sh -c '{
+    printf "From: printers@example.com\nTo: user@example.org\nSubject: big scan\n\nFIRST LINE 5521\n"
+    for n in $(seq 1 1600); do printf "%075d\n" "$n"; done
+    printf "LAST LINE 5522\n"
+} | /usr/sbin/sendmail -f printers@example.com user@example.org'
+wait_sendmail 2
+decoded=$(sendmail_requests | tail -1 | decoded_body)
+check "attached notice is multipart/mixed" '^Content-Type: multipart/mixed' "$decoded"
+check "attached notice gives the Graph failure" 'HTTP 403 from Graph' "$decoded"
+check "attachment starts with the failed message" 'FIRST LINE 5521' "$decoded"
+check "attachment is not cut off at 50 KB" 'LAST LINE 5522' "$decoded"
 
 cleanup
 
