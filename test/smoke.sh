@@ -104,21 +104,24 @@ inbound_suite() { # the access policy must hold identically in both modes
         check "$port accepts TLS 1.3" '^accepted TLSv1\.3$' "$(tls_probe "$port" tls1_3)"
         check "$port refuses TLS 1.0" '^refused$' "$(tls_probe "$port" tls1)"
         check "$port refuses TLS 1.1" '^refused$' "$(tls_probe "$port" tls1_1)"
+        check "$port refuses anonymous ciphers" '^refused$' "$(tls_probe "$port" tls1_2 aNULL)"
+        check "$port accepts an older cipher under TLS 1.2" '^accepted TLSv1\.2$' "$(tls_probe "$port" tls1_2 AES256-SHA)"
     done
     # the client's own policy can't be what refused: see the TLS_MIN_VERSION=TLSv1 stack
     check "the relay itself logs the refusal" 'TLS library problem: .*unsupported protocol' "$(docker logs "$RELAY" 2>&1)"
 }
 
 # A handshake limited to one TLS version, giving "accepted <version>", "refused" or
-# "no handshake". A refused handshake still prints the Protocol line, so "New," decides.
+# "no handshake". A refused handshake still prints the Protocol line, so "New," decides,
+# and that line's own label is the cipher's era ("New, SSLv3"), not the version in use.
 # The client's security level is lowered so that it will offer old versions, and the
 # TLS_MIN_VERSION=TLSv1 stack shows it does.
-tls_probe() { # tls_probe <port> <tls1|tls1_1|tls1_2|tls1_3>
+tls_probe() { # tls_probe <port> <tls1|tls1_1|tls1_2|tls1_3> [cipher list]
     local out
-    out=$(docker exec "$RELAY" sh -c "echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:$1 -$2 -cipher ALL:@SECLEVEL=0 2>&1")
+    out=$(docker exec "$RELAY" sh -c "echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:$1 -$2 -cipher ${3:-ALL}:@SECLEVEL=0 2>&1")
     case "$out" in
         *"New, (NONE)"*) echo refused ;;
-        *"New, TLS"*) echo "accepted $(printf '%s\n' "$out" | sed -n 's/^ *Protocol *: *//p' | head -1 | tr -d '\r')" ;;
+        *"New, "*) echo "accepted $(printf '%s\n' "$out" | sed -n 's/^ *Protocol *: *//p' | head -1 | tr -d '\r')" ;;
         *) echo "no handshake" ;;
     esac
 }
@@ -390,6 +393,10 @@ boot_stack graph
 for port in 25 587; do
     check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.0" '^accepted TLSv1$' "$(tls_probe "$port" tls1)"
     check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.1" '^accepted TLSv1\.1$' "$(tls_probe "$port" tls1_1)"
+    # the suite a real older printer used over TLS 1.0
+    check "with TLS_MIN_VERSION=TLSv1, $port accepts ECDHE-RSA-AES256-SHA" '^accepted TLSv1$' "$(tls_probe "$port" tls1 ECDHE-RSA-AES256-SHA)"
+    check "with TLS_MIN_VERSION=TLSv1, $port still refuses anonymous ciphers" '^refused$' "$(tls_probe "$port" tls1 aNULL)"
+    check "with TLS_MIN_VERSION=TLSv1, $port still gives a modern client TLS 1.3" '^accepted TLSv1\.3$' "$(docker exec "$RELAY" sh -c "echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:$port 2>&1" | sed -n 's/^ *Protocol *: *//p' | head -1 | tr -d '\r' | sed 's/^/accepted /')"
 done
 cleanup
 unset TLS_MIN_VERSION

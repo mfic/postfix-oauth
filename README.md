@@ -177,14 +177,18 @@ unless the printer has a mapped mailbox (step 3a).
   rather than STARTTLS) can't connect.
 - **Versions:** the relay accepts TLS 1.2 and 1.3. It refuses TLS 1.0 and 1.1 on both
   ports, and that will affect older printers: in a live test, one real printer used
-  TLS 1.0 before this limit existed. TLS itself stays optional, so what a refused
-  printer does next is up to the printer: it may fail the scan, or **send in plain
-  text, password included**. Check each older printer after updating. A refused
+  TLS 1.0, and failed once it was refused, without falling back to plain text. TLS
+  itself stays optional, so what a refused printer does next is up to the printer:
+  another model may **send in plain text, password included**. Check each older
+  printer after updating. A refused
   attempt logs `SSL_accept error from <client>`, and a printer that fell back has no
   `TLS connection established` line for its message.
 - **A printer that can't do TLS 1.2:** set `TLS_MIN_VERSION=TLSv1` in `.env`, then run
-  `docker compose up -d`. This applies to every client on both ports. The accepted
-  values are `TLSv1`, `TLSv1.1`, `TLSv1.2` and `TLSv1.3`.
+  `docker compose up -d`. This applies to every client on both ports, though a client
+  that supports newer versions still negotiates them. The accepted values are `TLSv1`,
+  `TLSv1.1`, `TLSv1.2` and `TLSv1.3`.
+- **Ciphers:** anonymous ciphers are refused. Older ones such as AES-CBC with SHA-1 are
+  still accepted, because older printers may need them.
 - **Which printers use TLS:** each TLS connection logs a line. A client with no
   such line sent in plain text.
 
@@ -463,7 +467,6 @@ Microsoft does with it. **Not yet proven against a real tenant:**
 - whether a real printer checks the relay's certificate. Printers have connected over
   TLS with a production Let's Encrypt certificate, but the log can't show whether
   they checked it
-- what a real printer does when TLS 1.0 is refused
 - all of smtp mode's connection to `smtp.office365.com`, including SendAs and
   failure notices
 
