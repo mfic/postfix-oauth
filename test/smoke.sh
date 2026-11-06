@@ -281,12 +281,21 @@ check "a message for 60 recipients stays one Graph request" '^1$' "$(sendmail_re
 reset_requests
 docker exec "$MOCK" sh -c 'echo 403 > /state/status_once'
 smtp_dialogue local 25 'MAIL FROM:<wrong@nowhere.com>' 'RCPT TO:<user@example.org>' \
-    'DATA' 'From: wrong@nowhere.com' 'To: user@example.org' 'Subject: fails' '' 'x' '.' >/dev/null
+    'DATA' 'From: wrong@nowhere.com' 'To: user@example.org' 'Subject: fails' '' 'SCAN MARKER 9931' '.' >/dev/null
 wait_sendmail 2
 sent=$(sendmail_requests | tail -1)
 decoded=$(printf '%s' "$sent" | decoded_body)
 check "failure notice is sent as the configured sender" '/v1.0/users/noreply@example.com/sendMail' "$sent"
 check "failure notice goes to the configured mailbox" '^To: notices@example\.com' "$decoded"
+check "failure notice is plain text" '^Content-Type: text/plain' "$decoded"
+check "failure notice names the failed recipient" 'Recipient: user@example\.org' "$decoded"
+check "failure notice gives the Graph failure" 'HTTP 403 from Graph' "$decoded"
+check "failure notice gives the original subject" 'Subject:  fails' "$decoded"
+if printf '%s\n' "$decoded" | grep -q 'SCAN MARKER 9931'; then
+    check "failure notice leaves out the message content" 'absent' 'present'
+else
+    check "failure notice leaves out the message content" 'absent' 'absent'
+fi
 
 cleanup
 unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER

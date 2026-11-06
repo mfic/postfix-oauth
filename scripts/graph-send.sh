@@ -23,8 +23,8 @@ cat > "$msg"
 
 # Postfix's own notices have no mailbox to send from: bounces arrive with the
 # null sender, which pipe(8) expands to MAILER-DAEMON, and postmaster notices
-# with double_bounce_sender. A bounce goes to FAILURE_NOTICE_MAILBOX, sent as
-# FAILURE_NOTICE_SENDER, if those are set. Everything else is only logged, since
+# with double_bounce_sender. A bounce becomes a plain text notice to
+# FAILURE_NOTICE_MAILBOX, sent as FAILURE_NOTICE_SENDER, if those are set. Everything else is only logged, since
 # posting it would just fail at Graph; postmaster notices can quote printer
 # credentials from the SMTP transcript, so they are never mailed. pipe(8) logs
 # command output only on failure, hence exit 69; Postfix discards an
@@ -32,8 +32,16 @@ cat > "$msg"
 log_prefix=""
 case "$sender" in
     MAILER-DAEMON|double-bounce@*)
-        failed=$(sed -n 's/^Final-Recipient: *rfc822; *//Ip' "$msg" | tr -d '\r' | paste -sd, -)
-        original=$(sed -n 's/^X-Postfix-Queue-ID: *//Ip' "$msg" | tr -d '\r' | head -n 1)
+        # Only the delivery-status part and the failed message's headers are read,
+        # so nothing from the message's content can reach the log or the notice.
+        report=$(tr -d '\r' < "$msg" | awk '
+            /^Content-Type: message\/delivery-status/ { inside = 1; next }
+            inside && /^--/ { exit }
+            inside && /^[ \t]/ { sub(/^[ \t]+/, " "); line = line $0; next }
+            inside { if (line != "") print line; line = $0 }
+            END { if (line != "") print line }')
+        failed=$(printf '%s\n' "$report" | sed -n 's/^Final-Recipient: *rfc822; *//p' | paste -sd, -)
+        original=$(printf '%s\n' "$report" | sed -n 's/^X-Postfix-Queue-ID: *//p' | head -n 1)
         details="original message ${original:-unknown}, failed recipients ${failed:-unknown}"
         if [ "$sender" != MAILER-DAEMON ] || [ -z "${FAILURE_NOTICE_MAILBOX:-}" ]; then
             echo "graph-send: FAILURE NOTICE NOT SENT to $* (no mailbox to send it from): $details" >&2
@@ -42,18 +50,36 @@ case "$sender" in
         log_prefix="FAILURE NOTICE NOT SENT to $FAILURE_NOTICE_MAILBOX ($details): "
         sender=$FAILURE_NOTICE_SENDER
         set -- "$FAILURE_NOTICE_MAILBOX"
-        # Graph takes the sender and recipients from the MIME headers
-        awk -v from="$sender" -v to="$1" '
-            in_body { print; next }
-            /^\r?$/ { in_body = 1; print; next }
-            /^[ \t]/ { if (!skip) print; next }
-            {
-                skip = 0
-                name = tolower($0)
-                if (name ~ /^from:/) { print "From: " from; skip = 1; next }
-                if (name ~ /^to:/) { print "To: " to; skip = 1; next }
-                print
-            }' "$msg" > "$msg.notice"
+
+        # Plain text, because Graph accepts a multipart/report with a 2xx but Exchange
+        # does not deliver it (tested live). Graph takes sender and recipients from
+        # these headers.
+        original_sender=$(printf '%s\n' "$report" | sed -n 's/^X-Postfix-Sender: *rfc822; *//p' | head -n 1)
+        original_subject=$(tr -d '\r' < "$msg" | awk '
+            /^Content-Type: (message\/rfc822|text\/rfc822-headers)/ { part = 1; next }
+            part == 1 && /^$/ { part = 2; next }
+            part == 2 && /^$/ { exit }
+            part == 2 && /^[ \t]/ { if (found) { sub(/^[ \t]+/, " "); subject = subject $0 } next }
+            part == 2 { found = (tolower($0) ~ /^subject:/); if (found) subject = substr($0, 9) }
+            END { sub(/^[ \t]+/, "", subject); print subject }')
+        {
+            tr -d '\r' < "$msg" | sed '/^$/q' | grep -iE '^(date|message-id):'
+            printf 'From: %s\nTo: %s\n' "$sender" "$1"
+            printf 'Subject: Mail relay: delivery failed (%s)\n' "${original:-unknown}"
+            printf 'Auto-Submitted: auto-replied\nMIME-Version: 1.0\n'
+            printf 'Content-Type: text/plain; charset=utf-8\n\n'
+            printf 'A message sent through the mail relay could not be delivered, and the\n'
+            printf 'relay will not retry it.\n\n'
+            printf 'Queue ID: %s\n' "${original:-unknown}"
+            printf 'Sender:   %s\n' "${original_sender:-unknown}"
+            printf 'Subject:  %s\n\n' "${original_subject:-unknown}"
+            printf '%s\n' "$report" | awk '
+                /^Final-Recipient:/ { sub(/^[^;]*; */, ""); print "Recipient: " $0 }
+                /^Status:/ { sub(/^[^:]*: */, ""); print "Status:    " $0 }
+                /^Diagnostic-Code:/ { sub(/^[^;]*; */, ""); print "Reason:    " $0; print "" }'
+            printf "The message's content is not included. The relay's log has more under the\n"
+            printf 'queue ID.\n'
+        } > "$msg.notice"
         mv -f "$msg.notice" "$msg" ;;
 esac
 

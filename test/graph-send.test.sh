@@ -158,7 +158,7 @@ echo 202 > "$TMP/status"
 
 # --- Postfix's own notices are reported, never posted to Graph -------------
 before=$(grep -c sendMail "$TMP/requests.jsonl")
-NOTICE=$'From: MAILER-DAEMON@relay\r\nTo: printers@example.com\r\nSubject: Undelivered\r\n\r\nX-Postfix-Queue-ID: ABC123\r\nFinal-Recipient: rfc822; user@example.org\r\n'
+NOTICE=$'From: MAILER-DAEMON@relay (Mail Delivery System)\r\nTo: printers@example.com\r\nSubject: Undelivered Mail Returned to Sender\r\nDate: Fri, 06 Nov 2026 14:04:25 +0000\r\nMessage-Id: <bounce-1@relay>\r\nAuto-Submitted: auto-replied\r\nMIME-Version: 1.0\r\nContent-Type: multipart/report; report-type=delivery-status;\r\n\tboundary="B/relay"\r\n\r\nThis is a MIME-encapsulated message.\r\n\r\n--B/relay\r\nContent-Description: Notification\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nThis is the mail system at host relay.\r\n\r\n--B/relay\r\nContent-Description: Delivery report\r\nContent-Type: message/delivery-status\r\n\r\nReporting-MTA: dns; relay\r\nX-Postfix-Queue-ID: ABC123\r\nX-Postfix-Sender: rfc822; printers@example.com\r\n\r\nFinal-Recipient: rfc822; user@example.org\r\nAction: failed\r\nStatus: 5.3.0\r\nDiagnostic-Code: x-unix; graph-send: HTTP 403 from Graph, bouncing (message 358\r\n    bytes, request 480 bytes): {"error":{"code":"ErrorAccessDenied"}}\r\n\r\nFinal-Recipient: rfc822; second@example.org\r\nAction: failed\r\nStatus: 5.3.0\r\nDiagnostic-Code: x-unix; graph-send: HTTP 403 second\r\n\r\n--B/relay\r\nContent-Description: Undelivered Message\r\nContent-Type: message/rfc822\r\nContent-Transfer-Encoding: 8bit\r\n\r\nFrom: printers@example.com\r\nTo: user@example.org\r\nSubject: Scan from\r\n lobby printer\r\n\r\nSCAN CONTENT MARKER\r\nFinal-Recipient: rfc822; planted@example.org\r\nSubject: planted subject\r\n\r\n--B/relay--\r\n'
 for notice_sender in MAILER-DAEMON double-bounce@relay.example.com; do
     MIME=$NOTICE
     run_send "$notice_sender" printers@example.com
@@ -177,7 +177,7 @@ printf '%s' "test-token-123" > "$TMP/token"
 
 # --- with a configured mailbox, a bounce goes there as the configured sender --
 run_notice() { # run_notice <sender>
-    MIME=$'From: MAILER-DAEMON@relay (Mail Delivery System)\r\nTo: printers@example.com\r\nSubject: Undelivered\r\n\r\nTo: body line\r\nX-Postfix-Queue-ID: ABC123\r\nFinal-Recipient: rfc822; user@example.org\r\n'
+    MIME=$NOTICE
     printf '%s' "$MIME" | \
         TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
         FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com \
@@ -191,8 +191,30 @@ check "bounce is sent as the configured sender" \
 req_field body | base64 -d > "$TMP/decoded" 2>/dev/null
 check "bounce gets the configured sender in From" "From: noreply@example.com" \
     "$(grep -i '^From:' "$TMP/decoded" | tr -d '\r')"
-check "bounce goes only to the configured mailbox" $'To: notices@example.com\nTo: body line' \
+check "bounce goes only to the configured mailbox" "To: notices@example.com" \
     "$(grep -i '^To:' "$TMP/decoded" | tr -d '\r')"
+check "notice is plain text, because Exchange drops a multipart/report" \
+    "Content-Type: text/plain; charset=utf-8" "$(grep -i '^Content-Type:' "$TMP/decoded")"
+check "notice subject names the queue ID" "Subject: Mail relay: delivery failed (ABC123)" \
+    "$(grep -m1 '^Subject:' "$TMP/decoded")"
+check "notice keeps the bounce's Message-Id" "Message-Id: <bounce-1@relay>" \
+    "$(grep -i '^Message-Id:' "$TMP/decoded")"
+for expected in 'Queue ID: ABC123' 'Sender:   printers@example.com' 'Subject:  Scan from lobby printer' \
+    'Recipient: user@example.org' 'Recipient: second@example.org' 'Status:    5.3.0' \
+    'HTTP 403 from Graph' 'ErrorAccessDenied'; do
+    if grep -qF "$expected" "$TMP/decoded"; then
+        echo "PASS: notice states '$expected'"; pass=$((pass+1))
+    else
+        echo "FAIL: notice states '$expected'"; fail=$((fail+1))
+    fi
+done
+for leak in 'SCAN CONTENT MARKER' 'planted' 'multipart' 'Mail Delivery System'; do
+    if grep -qF "$leak" "$TMP/decoded"; then
+        echo "FAIL: notice must not contain '$leak'"; fail=$((fail+1))
+    else
+        echo "PASS: notice does not contain '$leak'"; pass=$((pass+1))
+    fi
+done
 if grep -qi '^Bcc:' "$TMP/decoded"; then
     echo "FAIL: original sender is not added as Bcc"; fail=$((fail+1))
 else
@@ -202,10 +224,15 @@ fi
 echo 403 > "$TMP/status"
 run_notice MAILER-DAEMON
 check "refused notice exits 69" "69" "$(cat "$TMP/exit")"
-if grep -q 'FAILURE NOTICE NOT SENT to notices@example.com.*ABC123.*HTTP 403' "$TMP/stderr"; then
+if grep -q 'FAILURE NOTICE NOT SENT to notices@example.com.*ABC123.*user@example.org,second@example.org.*HTTP 403' "$TMP/stderr"; then
     echo "PASS: refused notice is logged with what failed"; pass=$((pass+1))
 else
     echo "FAIL: refused notice is logged with what failed: $(cat "$TMP/stderr")"; fail=$((fail+1))
+fi
+if grep -q 'planted' "$TMP/stderr"; then
+    echo "FAIL: log must not take details from the message's content"; fail=$((fail+1))
+else
+    echo "PASS: log does not take details from the message's content"; pass=$((pass+1))
 fi
 echo 503 > "$TMP/status"
 run_notice MAILER-DAEMON

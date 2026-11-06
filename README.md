@@ -285,9 +285,12 @@ FAILURE_NOTICE_SENDER=no-reply@example.com    # sends them
 
 - The sender must be a mailbox in the app's scope (step 2a). It doesn't need to be
   in `allowed_senders`. The recipient can be any address.
-- A notice contains the failure reason, the failed message's headers, and up to
-  50 KB of its content, which may include part of a scan. Choose the recipient with
-  that in mind.
+- A notice is plain text with the queue ID, sender, subject, failed recipients and
+  failure reason, including Graph's error. It never contains the message's content.
+  Plain text is required: in a live test, Graph accepted Postfix's usual
+  `multipart/report` bounce format, but Exchange routed it back to the sending
+  mailbox's Inbox instead of its recipient. So a `2xx` from Graph, or a copy in Sent
+  Items, doesn't prove delivery.
 - Without these settings, or if a notice itself is refused, the only record is the
   log. Each such notice is logged as `graph-send: FAILURE NOTICE NOT SENT`, with the
   original message's queue ID and the failed recipients:
@@ -350,7 +353,7 @@ Microsoft does with it. **Not yet proven against a real tenant:**
 - attachments above 10 MB, and the status code Graph uses to refuse by size
 - a From naming a second mailbox inside the app's scope
 - a real printer as the client
-- a real failure notice reaching `FAILURE_NOTICE_MAILBOX`
+- a real relay failure producing a notice that reaches `FAILURE_NOTICE_MAILBOX`
 - all of smtp mode's connection to `smtp.office365.com`, including SendAs and
   failure notices
 
