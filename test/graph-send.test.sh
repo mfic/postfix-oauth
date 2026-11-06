@@ -176,9 +176,11 @@ check "notice is reported even without a token" "69" "$(cat "$TMP/exit")"
 printf '%s' "test-token-123" > "$TMP/token"
 
 # --- graph-size-test.sh reports what Graph accepts --------------------------
+printf '#!/bin/bash\nexec bash scripts/graph-send.sh "$@"\n' > "$TMP/graph-send"
+chmod +x "$TMP/graph-send"
 size_test() {
     TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
-    GRAPH_SEND="scripts/graph-send.sh" \
+    GRAPH_SEND="$TMP/graph-send" \
         bash scripts/graph-size-test.sh printers@example.com user@example.org 1 2 2>&1
 }
 echo 2500000 > "$TMP/max_body"   # 1 MB attachment fits, 2 MB does not

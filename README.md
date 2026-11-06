@@ -320,7 +320,15 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   in graph mode, and to the queue, with delivery held, in smtp mode.
 
 All of this runs against mocks. It proves what the relay sends, not what
-Microsoft does with it.
+Microsoft does with it. **Not yet proven against a real tenant:**
+
+- a real send under RBAC for Applications with no Entra `Mail.Send` consent, and
+  that a mailbox outside the scope is refused
+- the Graph size limit for `sendMail`, and the status code it returns
+- how Microsoft treats a From that differs from the sending mailbox
+- real delivery as a mapped mailbox
+- all of smtp mode's connection to `smtp.office365.com`, including SendAs and
+  failure notices
 
 ### Continuous checks
 
