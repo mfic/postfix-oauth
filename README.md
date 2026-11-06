@@ -476,6 +476,7 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   `postfix reload`, a bad pair stopping a real boot, and the real certbot sidecar
   against Pebble, Let's Encrypt's test server, with a mock Cloudflare API
   (`test/mock-cloudflare.py`). `tls-cert.test.sh` has every other certificate rule.
+  Run part of it with `./test/smoke.sh <section>...`: `graph`, `notice-attachment`, `trusted-networks`, `bad-config`, `graph-mapped`, `older-tls`, `certificates`, `letsencrypt`, `smtp`, `smtp-mapped`.
 
 Everything in this section runs against mocks. It proves what the relay sends, not what
 Microsoft does with it. **Not yet proven against a real tenant:**
