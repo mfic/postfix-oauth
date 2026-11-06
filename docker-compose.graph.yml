@@ -16,7 +16,8 @@ services:
       - ./config:/config:ro
       - postfix-spool:/var/spool/postfix
     healthcheck:
-      test: ["CMD-SHELL", "printf 'QUIT\r\n' | nc -w 3 127.0.0.1 25 | grep -q ^220"]
+      # sends nothing: Postfix answers 554 to a client that talks before the banner
+      test: ["CMD-SHELL", "nc -w 3 127.0.0.1 25 </dev/null | grep -q ^220"]
       interval: 30s
       timeout: 5s
       retries: 3

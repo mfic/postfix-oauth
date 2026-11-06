@@ -27,7 +27,7 @@ smtp_tls_security_level = encrypt
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
 smtp_tls_loglevel = 1
 # M365 rejects mail whose envelope sender isn't the authenticated mailbox or a
-# SendAs-permitted address; retry a few times, then bounce back to the printer
+# SendAs-permitted address (see README "Failure notices" for what happens next)
 smtp_sender_dependent_authentication = no
 EOF
 

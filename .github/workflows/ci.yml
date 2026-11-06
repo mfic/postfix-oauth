@@ -27,5 +27,8 @@ jobs:
       - name: Unit tests (graph-send)
         run: ./test/graph-send.test.sh
 
+      - name: Unit tests (sender-rewrite)
+        run: bash ./test/sender-rewrite.test.sh
+
       - name: Smoke test (both outbound modes)
         run: ./test/smoke.sh

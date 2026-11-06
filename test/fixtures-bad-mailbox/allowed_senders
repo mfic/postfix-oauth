@@ -1,0 +1,5 @@
+# Test fixture: sender whitelist for the per-client mailbox stacks
+printers@example.com
+scanner@example.com
+lobby@example.com
+ip@example.com

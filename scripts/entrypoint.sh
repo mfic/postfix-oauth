@@ -60,6 +60,62 @@ fi
 envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${PRINTER_NETWORKS}' \
     < "$TEMPLATES/main.cf.tmpl" > /etc/postfix/main.cf
 
+# ------------------------------------------- optional per-client mailboxes
+# /config/client_senders: lines of "<ip-or-cidr|account> <mailbox>". A mapped
+# client always sends as its mailbox, whatever it puts in MAIL FROM or From.
+# Without entries the policy in main.cf stays untouched. A bad entry is fatal:
+# skipping it would silently let that client pick its own sender.
+client_senders_fail() {
+    echo "FATAL: /config/client_senders: $1" >&2
+    exit 1
+}
+if [ -f /config/client_senders ] && grep -qEv '^\s*(#|$)' /config/client_senders; then
+    : > /etc/postfix/client_sender_filter.cidr
+    : > /etc/postfix/client_sender_accept.cidr
+    : > /etc/postfix/client_sender_filter_accounts
+    : > /etc/postfix/client_sender_accept_accounts
+    while read -r client mailbox extra || [ -n "${client:-}" ]; do
+        case "$client" in ''|\#*) continue ;; esac
+        [ -n "$mailbox" ] && [ -z "$extra" ] \
+            || client_senders_fail "expected '<ip-or-cidr|account> <mailbox>' for '$client'"
+        [[ "$mailbox" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+$ ]] \
+            || client_senders_fail "'$mailbox' is not a mailbox address"
+        mailbox=$(printf '%s' "$mailbox" | tr '[:upper:]' '[:lower:]')
+        grep -qxF -- "$mailbox OK" /etc/postfix/allowed_senders \
+            || client_senders_fail "'$mailbox' (for '$client') is not in allowed_senders"
+
+        if [[ "$client" =~ ^[0-9]+(\.[0-9]+){3}(/[0-9]+)?$ || "$client" == *:* ]]; then
+            printf '%s FILTER sender-rewrite:%s\n' "$client" "$mailbox" >> /etc/postfix/client_sender_filter.cidr
+            printf '%s OK\n' "$client" >> /etc/postfix/client_sender_accept.cidr
+        else
+            [ -f /config/printer_accounts ] && awk -v u="$client" '$1 == u { found = 1 } END { exit !found }' /config/printer_accounts \
+                || client_senders_fail "account '$client' is not in printer_accounts"
+            # smtpd_sasl_local_domain makes Postfix see the login as user@hostname
+            printf '%s@%s FILTER sender-rewrite:%s\n' "$client" "$POSTFIX_HOSTNAME" "$mailbox" >> /etc/postfix/client_sender_filter_accounts
+            printf '%s@%s OK\n' "$client" "$POSTFIX_HOSTNAME" >> /etc/postfix/client_sender_accept_accounts
+        fi
+    done < <(tr -d '\r' < /config/client_senders)
+
+    # Postfix only warns about a bad cidr line and then ignores it
+    if cidr_errors=$(postmap -q 0.0.0.0 cidr:/etc/postfix/client_sender_filter.cidr 2>&1 | grep -E 'warning|fatal'); then
+        client_senders_fail "invalid IP entry: $cidr_errors"
+    fi
+    postmap hash:/etc/postfix/client_sender_filter_accounts
+    postmap hash:/etc/postfix/client_sender_accept_accounts
+
+    # FILTER does not end the restriction list, so a second pass accepts the
+    # mapped client. On a double match the last FILTER wins: account over IP.
+    postconf -e "smtpd_sender_restrictions = \
+check_client_access cidr:/etc/postfix/client_sender_filter.cidr, \
+check_sasl_access hash:/etc/postfix/client_sender_filter_accounts, \
+check_client_access cidr:/etc/postfix/client_sender_accept.cidr, \
+check_sasl_access hash:/etc/postfix/client_sender_accept_accounts, \
+check_sender_access hash:/etc/postfix/allowed_senders, reject"
+    # one pipe call per message, or Graph would deliver to the header recipients twice
+    postconf -e "sender-rewrite_destination_recipient_limit = 1000"
+    echo "Loaded $(grep -cEv '^\s*(#|$)' /config/client_senders) client sender mapping(s)."
+fi
+
 mkdir -p /etc/tokens
 "$OUTBOUND_ADAPTER" setup
 

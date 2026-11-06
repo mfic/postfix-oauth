@@ -13,7 +13,7 @@ services:
       TOKEN_ENDPOINT: http://mockgraph:8080/token
       GRAPH_ENDPOINT: http://mockgraph:8080/v1.0
     volumes:
-      - ./fixtures:/config:ro
+      - ${FIXTURES:-./fixtures}:/config:ro
     depends_on:
       - mockgraph
 

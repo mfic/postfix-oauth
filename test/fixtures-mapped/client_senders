@@ -1,0 +1,3 @@
+# Test fixture: 127.0.0.1 is the "local" client of the smoke test
+127.0.0.1 ip@example.com
+printer-lobby lobby@example.com
