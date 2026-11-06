@@ -97,6 +97,30 @@ inbound_suite() { # the access policy must hold identically in both modes
 
     check_tls_logged 'postfix/smtpd' "the log shows TLS use on 25"
     check_tls_logged 'postfix/submission/smtpd' "the log shows TLS use on 587"
+
+    local port
+    for port in 25 587; do
+        check "$port accepts TLS 1.2" '^accepted TLSv1\.2$' "$(tls_probe "$port" tls1_2)"
+        check "$port accepts TLS 1.3" '^accepted TLSv1\.3$' "$(tls_probe "$port" tls1_3)"
+        check "$port refuses TLS 1.0" '^refused$' "$(tls_probe "$port" tls1)"
+        check "$port refuses TLS 1.1" '^refused$' "$(tls_probe "$port" tls1_1)"
+    done
+    # the client's own policy can't be what refused: see the TLS_MIN_VERSION=TLSv1 stack
+    check "the relay itself logs the refusal" 'TLS library problem: .*unsupported protocol' "$(docker logs "$RELAY" 2>&1)"
+}
+
+# A handshake limited to one TLS version, giving "accepted <version>", "refused" or
+# "no handshake". A refused handshake still prints the Protocol line, so "New," decides.
+# The client's security level is lowered so that it will offer old versions, and the
+# TLS_MIN_VERSION=TLSv1 stack shows it does.
+tls_probe() { # tls_probe <port> <tls1|tls1_1|tls1_2|tls1_3>
+    local out
+    out=$(docker exec "$RELAY" sh -c "echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:$1 -$2 -cipher ALL:@SECLEVEL=0 2>&1")
+    case "$out" in
+        *"New, (NONE)"*) echo refused ;;
+        *"New, TLS"*) echo "accepted $(printf '%s\n' "$out" | sed -n 's/^ *Protocol *: *//p' | head -1 | tr -d '\r')" ;;
+        *) echo "no handshake" ;;
+    esac
 }
 
 check_tls_logged() { # check_tls_logged <syslog name> <check name>: log lines arrive a moment late
@@ -179,6 +203,8 @@ bad_config_suite() {
     check "boot refuses an attachment setting without a mailbox" 'FATAL: FAILURE_NOTICE_ATTACH_MESSAGE needs' "$out"
     out=$(FIXTURES=./fixtures FAILURE_NOTICE_ATTACH_MESSAGE=maybe run_entrypoint)
     check "boot refuses an unknown attachment setting" 'FATAL: FAILURE_NOTICE_ATTACH_MESSAGE must be yes or no' "$out"
+    out=$(FIXTURES=./fixtures TLS_MIN_VERSION=SSLv3 run_entrypoint)
+    check "boot refuses an unknown TLS version" 'FATAL: TLS_MIN_VERSION must be' "$out"
     docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v --remove-orphans >/dev/null 2>&1
 }
 
@@ -355,6 +381,18 @@ fi
 
 cleanup
 unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER
+
+# ------------------------------------------------------- older TLS, on request
+# Also the control for the refusals above: the same client, offering the same old
+# versions, is accepted here, so those refusals came from the relay.
+export TLS_MIN_VERSION=TLSv1
+boot_stack graph
+for port in 25 587; do
+    check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.0" '^accepted TLSv1$' "$(tls_probe "$port" tls1)"
+    check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.1" '^accepted TLSv1\.1$' "$(tls_probe "$port" tls1_1)"
+done
+cleanup
+unset TLS_MIN_VERSION
 
 # ------------------------------------------------------- certificate handling
 # What a client on 587 is served: subject, issuer, serial, key type and name

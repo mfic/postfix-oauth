@@ -39,6 +39,10 @@ smtpd_tls_security_level = may
 smtpd_tls_cert_file = /etc/postfix/cert.pem
 smtpd_tls_key_file = /etc/postfix/key.pem
 smtpd_tls_auth_only = no
+# Both listeners take these from here. TLS stays optional, so a client refused here
+# can still send in plain text. TLS_MIN_VERSION defaults to TLSv1.2.
+smtpd_tls_protocols = >=${TLS_MIN_VERSION}
+smtpd_tls_mandatory_protocols = >=${TLS_MIN_VERSION}
 # log one line per TLS connection, so the log shows which clients use TLS
 smtpd_tls_loglevel = 1
 

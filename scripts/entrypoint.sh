@@ -79,8 +79,17 @@ fi
 export TRUSTED_NETWORKS
 echo "Loaded $(printf '%s' "$TRUSTED_NETWORKS" | wc -w) trusted network(s)."
 
+# ------------------------------------------------------ oldest TLS version
+export TLS_MIN_VERSION="${TLS_MIN_VERSION:-TLSv1.2}"
+case "$TLS_MIN_VERSION" in
+    TLSv1|TLSv1.1|TLSv1.2|TLSv1.3) ;;
+    *)
+        echo "FATAL: TLS_MIN_VERSION must be TLSv1, TLSv1.1, TLSv1.2 or TLSv1.3, not '$TLS_MIN_VERSION'." >&2
+        exit 1 ;;
+esac
+
 # ------------------------------------------------- render config templates
-envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${TRUSTED_NETWORKS}' \
+envsubst '${POSTFIX_HOSTNAME} ${POSTFIX_DOMAIN} ${TRUSTED_NETWORKS} ${TLS_MIN_VERSION}' \
     < "$TEMPLATES/main.cf.tmpl" > /etc/postfix/main.cf
 
 # ------------------------------------------- optional per-client mailboxes

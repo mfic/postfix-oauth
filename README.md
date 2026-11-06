@@ -175,8 +175,16 @@ unless the printer has a mapped mailbox (step 3a).
   certificate is logged and ignored, and the current certificate stays in use.
 - **Port 465 is not available:** a printer that only offers implicit TLS ("SSL/TLS"
   rather than STARTTLS) can't connect.
-- **Versions:** TLS 1.0 and newer are accepted, because older printers may not
-  support anything newer.
+- **Versions:** the relay accepts TLS 1.2 and 1.3. It refuses TLS 1.0 and 1.1 on both
+  ports, and that will affect older printers: in a live test, one real printer used
+  TLS 1.0 before this limit existed. TLS itself stays optional, so what a refused
+  printer does next is up to the printer: it may fail the scan, or **send in plain
+  text, password included**. Check each older printer after updating. A refused
+  attempt logs `SSL_accept error from <client>`, and a printer that fell back has no
+  `TLS connection established` line for its message.
+- **A printer that can't do TLS 1.2:** set `TLS_MIN_VERSION=TLSv1` in `.env`, then run
+  `docker compose up -d`. This applies to every client on both ports. The accepted
+  values are `TLSv1`, `TLSv1.1`, `TLSv1.2` and `TLSv1.3`.
 - **Which printers use TLS:** each TLS connection logs a line. A client with no
   such line sent in plain text.
 
@@ -222,7 +230,7 @@ the relay's hostname public. Starting the sidecar also accepts the
    docker compose up -d
    ```
 
-4. Within about 5 minutes the relay logs
+4. Within about 6 minutes the relay logs
    `TLS certificate: installed a new one from Let's Encrypt`. Until then it serves
    the self-signed certificate. Mail keeps flowing either way.
 5. Switch to production: remove the `LETSENCRYPT_SERVER` line from `.env`, then delete
@@ -232,6 +240,11 @@ the relay's hostname public. Starting the sidecar also accepts the
    docker compose exec certbot certbot delete --non-interactive --cert-name <POSTFIX_HOSTNAME>
    docker compose up -d
    ```
+
+   The relay serves its self-signed certificate until the new one arrives, about 6
+   minutes. Mail keeps flowing, but a printer that checks certificates fails during
+   that time, so pick a quiet moment. This gap only happens here: normal renewals swap
+   the certificate directly.
 
 The sidecar checks every 12 hours and renews when due, and the relay then loads the
 new certificate with no restart. A failed attempt is logged by the sidecar and retried
@@ -442,14 +455,15 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   against Pebble, Let's Encrypt's test server, with a mock Cloudflare API
   (`test/mock-cloudflare.py`).
 
-Issuing and renewing a certificate with real Cloudflare DNS has been run once by hand
-against the Let's Encrypt staging server, with no printer connected. A production
-certificate has not been tried. Everything else in this section runs against mocks. It proves what the relay sends, not what
+Everything in this section runs against mocks. It proves what the relay sends, not what
 Microsoft does with it. **Not yet proven against a real tenant:**
 
 - attachments above 10 MB, and the status code Graph uses to refuse by size
 - a From naming a second mailbox inside the app's scope
-- a real printer as the client
+- whether a real printer checks the relay's certificate. Printers have connected over
+  TLS with a production Let's Encrypt certificate, but the log can't show whether
+  they checked it
+- what a real printer does when TLS 1.0 is refused
 - all of smtp mode's connection to `smtp.office365.com`, including SendAs and
   failure notices
 
