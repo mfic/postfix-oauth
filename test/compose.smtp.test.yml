@@ -3,6 +3,11 @@ services:
     build: ..
     container_name: postfix-oauth-test-relay
     hostname: mailrelay.test.local
+    # Written per boot by test/smoke.sh (relay_env). environment: below wins over this file,
+    # so it lists only what every boot of this stack has.
+    env_file:
+      - path: .relay.env
+        required: false
     environment:
       TENANT_ID: 00000000-0000-0000-0000-000000000000
       CLIENT_ID: 00000000-0000-0000-0000-000000000000
@@ -11,9 +16,6 @@ services:
       OUTBOUND_MODE: smtp
       RELAY_MAILBOX: printers@example.com
       TOKEN_ENDPOINT: http://mockgraph:8080/token
-      FAILURE_NOTICE_MAILBOX: ${FAILURE_NOTICE_MAILBOX:-}
-      FAILURE_NOTICE_SENDER: ${FAILURE_NOTICE_SENDER:-}
-      FAILURE_NOTICE_ATTACH_MESSAGE: ${FAILURE_NOTICE_ATTACH_MESSAGE:-}
     volumes:
       - ${FIXTURES:-./fixtures}:/config:ro
     depends_on:

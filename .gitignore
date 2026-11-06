@@ -6,3 +6,4 @@ config/trusted_networks
 config/tls/
 cloudflare.ini
 test/.tls-fixtures/
+test/.relay.env

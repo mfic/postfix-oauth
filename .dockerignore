@@ -1,0 +1,2 @@
+# Runs in the certbot sidecar, mounted from the checkout: not part of the relay image.
+scripts/letsencrypt-renew.sh

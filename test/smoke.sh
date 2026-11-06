@@ -15,8 +15,17 @@ MOCK=postfix-oauth-test-mockgraph
 PROJECT=""
 COMPOSE=""
 
-cleanup() { [ -n "$COMPOSE" ] && $COMPOSE down -v >/dev/null 2>&1; rm -rf test/.tls-fixtures; }
+cleanup() { [ -n "$COMPOSE" ] && $COMPOSE down -v >/dev/null 2>&1; rm -rf test/.tls-fixtures test/.relay.env; }
 trap cleanup EXIT
+
+# relay_env [KEY=value]...: the relay's settings for the next boot, written to the env file
+# test compose reads, as production reads .env. Nothing else reaches the relay: a variable
+# exported here or by the host doesn't. Quoted so that compose takes the value literally.
+relay_env() {
+    local setting
+    for setting; do printf "%s='%s'
+" "${setting%%=*}" "${setting#*=}"; done > test/.relay.env
+}
 
 pass=0; fail=0
 check() { # check <name> <expected-regex> <output>
@@ -52,10 +61,11 @@ smtp_dialogue_tls() {
         -s -- relay "$port" "$@" < test/smtp-dialogue.sh
 }
 
-boot_stack() { # boot_stack <mode> [fixture-dir, relative to test/]
+boot_stack() { # boot_stack <mode> [fixture-dir, relative to test/] [KEY=value]...
     PROJECT="postfix-oauth-test-$1"
     COMPOSE="docker compose -p $PROJECT -f test/compose.$1.test.yml ${EXTRA_COMPOSE:-}"
     export FIXTURES="./${2:-fixtures}"
+    relay_env "${@:3}"
     echo
     echo "=== OUTBOUND_MODE=$1, config from test/${2:-fixtures} ==="
     $COMPOSE up -d --build --quiet-pull || { echo "FAIL: $1 stack did not start"; exit 1; }
@@ -186,7 +196,8 @@ mapped_policy_suite() {
 # its own sender. Runs the entrypoint only, so no stack needs to be up. One bad
 # file for each of the entrypoint's two calls to config-tables.sh, the first of
 # them inside a command substitution; test/config.test.sh has every other rule.
-run_entrypoint() {
+run_entrypoint() { # run_entrypoint [KEY=value]...
+    relay_env "$@"
     timeout 180 docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml \
         run --build -T --rm --no-deps relay 2>&1
 }
@@ -200,13 +211,13 @@ bad_config_suite() {
         check "boot refuses ${name%%:*}" "FATAL: /config/$expected" "$out"
         check "boot stops at ${name%%:*}" '^1$' "$status"
     done
-    out=$(FIXTURES=./fixtures FAILURE_NOTICE_MAILBOX=notices@example.com run_entrypoint)
+    out=$(FIXTURES=./fixtures run_entrypoint FAILURE_NOTICE_MAILBOX=notices@example.com)
     check "boot refuses a notice mailbox without a sender" 'FATAL: set FAILURE_NOTICE_MAILBOX and FAILURE_NOTICE_SENDER together' "$out"
-    out=$(FIXTURES=./fixtures FAILURE_NOTICE_ATTACH_MESSAGE=yes run_entrypoint)
+    out=$(FIXTURES=./fixtures run_entrypoint FAILURE_NOTICE_ATTACH_MESSAGE=yes)
     check "boot refuses an attachment setting without a mailbox" 'FATAL: FAILURE_NOTICE_ATTACH_MESSAGE needs' "$out"
-    out=$(FIXTURES=./fixtures FAILURE_NOTICE_ATTACH_MESSAGE=maybe run_entrypoint)
+    out=$(FIXTURES=./fixtures run_entrypoint FAILURE_NOTICE_ATTACH_MESSAGE=maybe)
     check "boot refuses an unknown attachment setting" 'FATAL: FAILURE_NOTICE_ATTACH_MESSAGE must be yes or no' "$out"
-    out=$(FIXTURES=./fixtures TLS_MIN_VERSION=SSLv3 run_entrypoint)
+    out=$(FIXTURES=./fixtures run_entrypoint TLS_MIN_VERSION=SSLv3)
     check "boot refuses an unknown TLS version" 'FATAL: TLS_MIN_VERSION must be' "$out"
     docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v --remove-orphans >/dev/null 2>&1
 }
@@ -261,9 +272,7 @@ docker exec "$MOCK" sh -c 'rm -f /state/status'
 cleanup
 
 # ------------------------------------------- graph mode, notice with attachment
-export FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com FAILURE_NOTICE_ATTACH_MESSAGE=yes
-boot_stack graph fixtures
-unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER FAILURE_NOTICE_ATTACH_MESSAGE
+boot_stack graph fixtures FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com FAILURE_NOTICE_ATTACH_MESSAGE=yes
 
 # about 120 KB, more than the 50 KB a bounce normally keeps. Submitted inside the
 # container, because SMTP dialogue arguments can't carry a message this long.
@@ -304,8 +313,7 @@ cleanup
 
 # ------------------------------------------------ graph mode, mapped mailboxes
 bad_config_suite
-export FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com
-boot_stack graph fixtures-mapped
+boot_stack graph fixtures-mapped FAILURE_NOTICE_MAILBOX=notices@example.com FAILURE_NOTICE_SENDER=noreply@example.com
 mapped_policy_suite
 
 lobby=$(auth_plain printer-lobby)
@@ -383,13 +391,11 @@ else
 fi
 
 cleanup
-unset FAILURE_NOTICE_MAILBOX FAILURE_NOTICE_SENDER
 
 # ------------------------------------------------------- older TLS, on request
 # Also the control for the refusals above: the same client, offering the same old
 # versions, is accepted here, so those refusals came from the relay.
-export TLS_MIN_VERSION=TLSv1
-boot_stack graph
+boot_stack graph fixtures TLS_MIN_VERSION=TLSv1
 for port in 25 587; do
     check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.0" '^accepted TLSv1$' "$(tls_probe "$port" tls1)"
     check "with TLS_MIN_VERSION=TLSv1, $port accepts TLS 1.1" '^accepted TLSv1\.1$' "$(tls_probe "$port" tls1_1)"
@@ -400,7 +406,6 @@ for port in 25 587; do
     check "with TLS_MIN_VERSION=TLSv1, $port still gives a modern client TLS 1.3" '^accepted TLSv1\.3$' "$(docker exec "$RELAY" sh -c "echo QUIT | timeout 15 openssl s_client -starttls smtp -crlf -connect 127.0.0.1:$port 2>&1" | sed -n 's/^ *Protocol *: *//p' | head -1 | tr -d '\r' | sed 's/^/accepted /')"
 done
 cleanup
-unset TLS_MIN_VERSION
 
 # ------------------------------------------------------- certificate handling
 # Only what needs a real stack; test/tls-cert.test.sh has the rules for choosing,
@@ -448,8 +453,7 @@ docker compose -p postfix-oauth-test-bad -f test/compose.graph.test.yml down -v 
 
 # a mounted certificate, renewed on disk, with no restart
 make_cert "$TLSFX/live/tls" first.example.test
-export TLS_WATCH_SECONDS=2
-boot_stack graph .tls-fixtures/live
+boot_stack graph .tls-fixtures/live TLS_WATCH_SECONDS=2
 wait_served "a mounted certificate is served" 'subject=CN *= *first\.example\.test'
 make_cert "$TLSFX/live/tls" renewed.example.test
 wait_served "a renewed certificate is served without a restart" 'subject=CN *= *renewed\.example\.test'
@@ -465,7 +469,6 @@ wait_served "a removed certificate doesn't survive a restart" 'subject=CN *= *ma
 out=$(smtp_dialogue_tls 587 'MAIL FROM:<printers@example.com>')
 check "the self-signed certificate works for STARTTLS" '250 2\.1\.0' "$out"
 cleanup
-unset TLS_WATCH_SECONDS
 
 # ------------------------------------------------------------- Let's Encrypt
 # The real sidecar definition against Pebble, with a mock Cloudflare API. The mock

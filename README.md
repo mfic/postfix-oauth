@@ -328,15 +328,17 @@ and the running relay is left as it was:
 | `config/tls/cert.pem` + `key.pem` | Optional real TLS cert (self-signed otherwise, see step 4) |
 | `cloudflare.ini` | Optional Cloudflare token for the Let's Encrypt sidecar (step 4a), mounted only into the sidecar |
 | `postfix/main.cf.tmpl`, `postfix/master.cf` | The Postfix policy — rendered/copied at startup, linted with `postfix check` |
+| `scripts/entrypoint.sh` | Container start: renders the Postfix config, runs the mode adapter's `setup`, starts the token refresher and Postfix |
 | `scripts/config-tables.sh` | The one reader of `config/`: checks each file and turns it into Postfix tables, SASL accounts and the sender policy |
 | `scripts/outbound-graph.sh` / `scripts/outbound-smtp.sh` | Outbound-mode adapters: each owns its mode's Postfix config, aux services, OAuth scope, and token store |
 | `scripts/graph-send.sh` | graph mode pipe transport: posts one queued message to Graph `sendMail` |
 | `scripts/failure-notice.sh` | graph mode: turns a Postfix bounce into the plain text failure notice that `graph-send.sh` posts |
 | `scripts/graph-size-test.sh` | graph mode: sends real test mails to find which scan sizes Microsoft accepts |
 | `scripts/tls-cert.sh` | Chooses the certificate Postfix serves and loads a new one when it changes |
-| `scripts/letsencrypt-renew.sh` | Runs in the certbot sidecar: obtains and renews the Let's Encrypt certificate |
+| `scripts/letsencrypt-renew.sh` | Runs in the certbot sidecar: obtains and renews the Let's Encrypt certificate. `.dockerignore` keeps it out of the relay image |
 | `scripts/sender-rewrite.sh` | Pipe transport for mapped clients: overwrites the sender, then re-injects the message |
 | `scripts/fetch-token.sh` | One-shot Entra ID token fetch; hands the token to the mode adapter (used at startup and by the refresher loop) |
+| `scripts/token-refresher.sh` | Background loop: calls `fetch-token.sh`, sleeps until well before expiry, repeats |
 
 Everything is rendered at container start. Changes in `config/` are applied by
 `docker compose restart`, except `config/tls/`, which is loaded by itself. Changes in `.env` need `docker compose up -d`, because
@@ -449,7 +451,7 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
   bounce goes in, MIME comes out, with no mock.
 - `./test/sender-rewrite.test.sh` — unit tests for the sender rewrite, with a
   stub `sendmail`.
-- `./test/tls-cert.test.sh` � unit tests for choosing the certificate, with real
+- `./test/tls-cert.test.sh` — unit tests for choosing the certificate, with real
   `openssl` and a stub `postfix`, no Docker: source order, every FATAL, mismatches,
   what the watcher does on a pass, expiry warnings and the self-signed rules.
 - `./test/config.test.sh` — tests for the config reader, with each case's files

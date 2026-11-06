@@ -5,7 +5,7 @@
 #
 # TOKEN_FILE and GRAPH_ENDPOINT can be overridden, e.g. for tests. Postfix
 # runs pipe commands with a scrubbed environment, so in the container these
-# come from the env file rendered by entrypoint.sh.
+# come from the env file written by outbound-graph.sh.
 set -u
 
 [ -f /etc/postfix-relay/graph-send.env ] && . /etc/postfix-relay/graph-send.env

@@ -8,7 +8,7 @@ export POSTFIX_HOSTNAME="${POSTFIX_HOSTNAME:-mailrelay.local}"
 export POSTFIX_DOMAIN="${POSTFIX_HOSTNAME#*.}"
 
 # outbound variant: graph (Graph Mail.Send, default) or smtp (SMTP XOAUTH2).
-# Everything mode-specific lives in the matching outbound-<mode>.sh adapter.
+# Everything mode-specific at boot lives in the matching outbound-<mode>.sh adapter.
 OUTBOUND_MODE="${OUTBOUND_MODE:-graph}"
 OUTBOUND_ADAPTER="/usr/local/bin/outbound-${OUTBOUND_MODE}.sh"
 if [ ! -x "$OUTBOUND_ADAPTER" ]; then
