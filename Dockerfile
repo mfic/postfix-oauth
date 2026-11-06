@@ -1,7 +1,7 @@
 FROM debian:trixie-slim AS build
 
 ENV DEBIAN_FRONTEND=noninteractive
-ARG SASL_XOAUTH2_VERSION=release-0.27
+ARG SASL_XOAUTH2_VERSION=release-0.28
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates cmake g++ make pkg-config pandoc \
