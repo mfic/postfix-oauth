@@ -4,7 +4,8 @@
 #
 #   setup                        render config, start aux services (once, at boot)
 #   token-scope                  print the OAuth scope this mode needs
-#   write-token <token> <ttl>    write this mode's token store atomically
+#   write-token <ttl>            write this mode's token store atomically, from
+#                                the token on stdin; fails if there is none
 #
 # GRAPH_ENDPOINT and TOKEN_FILE can be overridden, e.g. for tests.
 set -eu
@@ -68,8 +69,10 @@ token-scope)
     ;;
 
 write-token)
+    token=$(cat)
+    [ -n "$token" ] || { echo "outbound-graph: no token on stdin" >&2; exit 1; }
     umask 077
-    printf '%s' "${2:?token}" > "${TOKEN_FILE}.tmp"
+    printf '%s' "$token" > "${TOKEN_FILE}.tmp"
     # graph-send.sh runs as the pipe user "nobody" (pipe refuses postfix/root)
     chown nobody:nogroup "${TOKEN_FILE}.tmp" 2>/dev/null || true
     mv -f "${TOKEN_FILE}.tmp" "$TOKEN_FILE"

@@ -4,7 +4,8 @@
 #
 #   setup                        render config, start aux services (once, at boot)
 #   token-scope                  print the OAuth scope this mode needs
-#   write-token <token> <ttl>    write this mode's token store atomically
+#   write-token <ttl>            write this mode's token store atomically, from
+#                                the token on stdin; fails if there is none
 #
 # TOKEN_FILE can be overridden, e.g. for tests.
 set -eu
@@ -60,10 +61,12 @@ token-scope)
     ;;
 
 write-token)
+    token=$(cat)
+    [ -n "$token" ] || { echo "outbound-smtp: no token on stdin" >&2; exit 1; }
     umask 077
-    expiry=$(( $(date +%s) + ${3:?expires_in} ))
+    expiry=$(( $(date +%s) + ${2:?expires_in} ))
     printf '{"access_token": "%s", "refresh_token": "client_credentials", "expiry": "%s"}\n' \
-        "${2:?token}" "$expiry" > "${TOKEN_FILE}.tmp"
+        "$token" "$expiry" > "${TOKEN_FILE}.tmp"
     chown postfix:postfix "${TOKEN_FILE}.tmp" 2>/dev/null || true
     mv -f "${TOKEN_FILE}.tmp" "$TOKEN_FILE"
     ;;

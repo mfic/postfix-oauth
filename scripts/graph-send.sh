@@ -18,7 +18,8 @@ shift
 
 msg=$(mktemp)
 response=$(mktemp)
-trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$msg.bounce" "$response"' EXIT
+auth_header=$(mktemp)
+trap 'rm -f "$msg" "$msg.bcc" "$msg.notice" "$msg.bounce" "$response" "$auth_header"' EXIT
 cat > "$msg"
 
 # Postfix's own notices have no mailbox to send from: bounces arrive with the
@@ -68,6 +69,8 @@ if ! token=$(cat "$TOKEN_FILE" 2>/dev/null) || [ -z "$token" ]; then
     echo "graph-send: no access token at $TOKEN_FILE, deferring" >&2
     exit 75
 fi
+# From a file, as any user in the container can read curl's command line
+printf 'Authorization: Bearer %s\n' "$token" > "$auth_header"
 
 # Graph delivers to the recipients named in the MIME headers, not to the
 # envelope. Envelope recipients missing from To/Cc (e.g. a printer's BCC) are
@@ -97,7 +100,7 @@ fi
 post_message() {
     status=$(base64 -w0 < "$msg" | curl -s -o "$response" -w '%{http_code}' -X POST \
         "$GRAPH_ENDPOINT/users/$sender/sendMail" \
-        -H "Authorization: Bearer $token" \
+        -H "@$auth_header" \
         -H "Content-Type: text/plain" \
         --data-binary @-)
 }

@@ -22,6 +22,16 @@ for _ in $(seq 1 50); do
 done
 [ -n "$up" ] || { echo "FAIL: mock server did not start"; exit 1; }
 
+# A stand-in curl records its command line, which any user in the container can read
+real_curl=$(command -v curl)
+mkdir "$TMP/spy"
+cat > "$TMP/spy/curl" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-argv"
+exec "$real_curl" "\$@"
+EOF
+chmod +x "$TMP/spy/curl"
+
 pass=0; fail=0
 check() { # check <name> <expected> <actual>
     if [ "$3" = "$2" ]; then
@@ -34,7 +44,7 @@ check() { # check <name> <expected> <actual>
 # run_send <sender> <recipient>... - feeds $MIME on stdin, captures exit code
 run_send() {
     printf '%s' "$MIME" | \
-        TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
+        PATH="$TMP/spy:$PATH" TOKEN_FILE="$TMP/token" GRAPH_ENDPOINT="http://127.0.0.1:$PORT/v1.0" \
         bash scripts/graph-send.sh "$@" 2>"$TMP/stderr"
     echo "$?" > "$TMP/exit"
 }
@@ -57,6 +67,14 @@ check "posts to the sender's sendMail endpoint" \
     "/v1.0/users/printers@example.com/sendMail" "$(req_field path)"
 check "authenticates with the bearer token" \
     "Bearer test-token-123" "$(req_field authorization)"
+if [ -s "$TMP/curl-argv" ] && ! grep -qF "test-token-123" "$TMP/curl-argv"; then
+    echo "PASS: token stays off curl's command line"; pass=$((pass+1))
+else
+    echo "FAIL: token stays off curl's command line: $(cat "$TMP/curl-argv" 2>/dev/null)"; fail=$((fail+1))
+fi
+mkdir "$TMP/work"
+TMPDIR="$TMP/work" run_send printers@example.com user@example.org
+check "leaves no temporary file behind" "" "$(ls -A "$TMP/work")"
 check "sends MIME as text/plain" "text/plain" "$(req_field content_type)"
 # byte-exact comparison ($(...) would strip trailing newlines)
 req_field body | base64 -d > "$TMP/decoded" 2>/dev/null

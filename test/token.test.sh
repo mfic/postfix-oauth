@@ -34,13 +34,24 @@ cat > "$TMP/adapters/outbound-stub.sh" <<EOF
 case "\$1" in
 token-scope) echo "stub-scope/.default" ;;
 write-token)
-    printf '%s %s\n' "\$2" "\$3" >> "$TMP/written"
+    printf '%s\n' "\$*" >> "$TMP/adapter-argv"
+    printf '%s %s\n' "\$(cat)" "\$2" >> "$TMP/written"
     exit \$(cat "$TMP/write-status")
     ;;
 esac
 EOF
 chmod +x "$TMP/adapters/outbound-stub.sh"
 echo 0 > "$TMP/write-status"
+
+# A stand-in curl records its command line, which any user in the container can read
+real_curl=$(command -v curl)
+mkdir "$TMP/spy"
+cat > "$TMP/spy/curl" <<EOF
+#!/bin/bash
+printf '%s\n' "\$*" >> "$TMP/curl-argv"
+exec "$real_curl" "\$@"
+EOF
+chmod +x "$TMP/spy/curl"
 
 pass=0; fail=0
 check() { # check <name> <expected> <actual>
@@ -68,10 +79,20 @@ keeps_out() { # keeps_out <name> <text>
     fi
 }
 
+off_command_line() { # off_command_line <name> <text> <argv file>
+    if [ ! -s "$3" ]; then
+        echo "FAIL: $1: nothing recorded in $3"; fail=$((fail+1))
+    elif grep -qF -- "$2" "$3"; then
+        echo "FAIL: $1: $(cat "$3")"; fail=$((fail+1))
+    else
+        echo "PASS: $1"; pass=$((pass+1))
+    fi
+}
+
 respond() { printf '%s\n%s' "$1" "$2" > "$TMP/token_response"; } # respond <status> <body>
 fetch() { # fetch [<endpoint>]; leaves $TMP/out, err, exit and written
     : > "$TMP/written"
-    TENANT_ID=fake-tenant CLIENT_ID=fake-client-id CLIENT_SECRET="$SECRET" \
+    PATH="$TMP/spy:$PATH" TENANT_ID=fake-tenant CLIENT_ID=fake-client-id CLIENT_SECRET="$SECRET" \
         TOKEN_ENDPOINT="${1:-http://127.0.0.1:$PORT/token}" OUTBOUND_ADAPTER_DIR="$TMP/adapters" \
         bash scripts/fetch-token.sh "${MODE:-stub}" > "$TMP/out" 2> "$TMP/err"
     echo "$?" > "$TMP/exit"
@@ -103,16 +124,41 @@ case "$request" in
     *) echo "FAIL: the request asks for the adapter's scope: $request"; fail=$((fail+1)) ;;
 esac
 
+off_command_line "client secret stays off curl's command line" "$SECRET" "$TMP/curl-argv"
+off_command_line "token stays off the adapter's command line" "$TOKEN" "$TMP/adapter-argv"
+
+# A secret is one value, whatever characters Entra gave it
+ordinary_secret=$SECRET
+SECRET='a+b&c=d%e f~g'
+fetch
+request=$(tail -n 1 "$TMP/requests.jsonl")
+case "$request" in
+    *'client_secret=a%2Bb%26c%3Dd%25e%20f~g&'*|*'client_secret=a%2Bb%26c%3Dd%25e+f~g&'*)
+        echo "PASS: the secret is URL-encoded, with nothing added"; pass=$((pass+1)) ;;
+    *) echo "FAIL: the secret is URL-encoded, with nothing added: $request"; fail=$((fail+1)) ;;
+esac
+SECRET=$ordinary_secret
+
 # --- Entra refuses ------------------------------------------------------------
 respond 401 '{"error": "invalid_client", "error_description": "AADSTS7000215: fake refusal"}'
 fetch
 fails_cleanly "error response"
 logs "error response: logs Entra's description" "AADSTS7000215: fake refusal"
+logs "error response: logs the status" "HTTP 401"
+
+respond 400 '{"error": "invalid_request", "debug": "UNEXPECTED-FIELD"}'
+fetch
+fails_cleanly "error response with other fields"
+logs "error response with other fields: logs the error" "invalid_request"
+keeps_out "error response with other fields: logs nothing else" "UNEXPECTED-FIELD"
 
 # --- responses that aren't a token, and no response ---------------------------
 respond 502 '<html>502 Bad Gateway</html>'
 fetch
 fails_cleanly "non-JSON response"
+logs "non-JSON response: logs the status" "HTTP 502"
+logs "non-JSON response: logs the size" "28 bytes"
+keeps_out "non-JSON response: logs none of it" "Bad Gateway"
 
 respond 200 ''
 fetch
@@ -120,6 +166,33 @@ fails_cleanly "empty response"
 
 fetch "http://127.0.0.1:1/token"
 fails_cleanly "nothing listening"
+logs "nothing listening: logs that there was no status" "HTTP 000"
+
+# --- a reply that holds the token, but not usably: it must stay out of the log --
+for body in "{\"access_token\": \"$TOKEN\", \"expires_in\": 36" \
+    "{\"access_token\": \"$TOKEN" \
+    "{\"token\": \"$TOKEN\"}" \
+    "\"$TOKEN\"" \
+    "[\"$TOKEN\"]"; do
+    respond 200 "$body"
+    fetch
+    fails_cleanly "reply <$body>"
+    keeps_out "reply <$body>: token stays out of the log" "$TOKEN"
+done
+
+# --- an unusable lifetime: the token is good, and the refresher must survive ----
+for lifetime in '"soon"' '""' '-1' '0' '"0100"' '1.5' '99999999999999' 'true'; do
+    respond 200 "{\"access_token\": \"$TOKEN\", \"expires_in\": $lifetime}"
+    fetch
+    check "expires_in $lifetime: exits 0" "0" "$(text "$TMP/exit")"
+    check "expires_in $lifetime: assumes an hour" "3600" "$(text "$TMP/out")"
+    check "expires_in $lifetime: adapter gets the token" "$TOKEN 3600" "$(text "$TMP/written")"
+    logs "expires_in $lifetime: warns" "fetch-token: WARNING"
+done
+respond 200 "{\"access_token\": \"$TOKEN\", \"expires_in\": \"4242\"}"
+fetch
+check "expires_in as a numeric string is used" "4242" "$(text "$TMP/out")"
+keeps_out "and isn't warned about" "WARNING"
 
 # --- a token arrives, and storing it fails ------------------------------------
 respond 200 "{\"access_token\": \"$TOKEN\", \"expires_in\": 4242}"
@@ -142,6 +215,21 @@ for MODE in graph smtp; do
     keeps_out "$MODE adapter that can't store the token: token stays out of the log" "$TOKEN"
 done
 unset MODE
+
+# Both adapters store the token they get on stdin, in their own format
+respond 200 "{\"access_token\": \"$TOKEN\", \"expires_in\": 4242}"
+MODE=graph TOKEN_FILE="$TMP/store-graph" fetch
+check "graph adapter stores the raw token" "$TOKEN" "$(cat "$TMP/store-graph" 2>/dev/null)"
+MODE=smtp TOKEN_FILE="$TMP/store-smtp" fetch
+check "smtp adapter stores the token as JSON" "$TOKEN" "$(jq -r .access_token "$TMP/store-smtp" 2>/dev/null | tr -d '\r')"
+
+# An adapter given no token keeps the store it has
+printf 'older' > "$TMP/store-graph"
+printf '' | TOKEN_FILE="$TMP/store-graph" bash "$TMP/adapters/outbound-graph.sh" write-token 4242 2>/dev/null
+check "graph adapter refuses an empty token" "1 older" "$? $(cat "$TMP/store-graph")"
+printf 'older' > "$TMP/store-smtp"
+printf '' | TOKEN_FILE="$TMP/store-smtp" bash "$TMP/adapters/outbound-smtp.sh" write-token 4242 2>/dev/null
+check "smtp adapter refuses an empty token" "1 older" "$? $(cat "$TMP/store-smtp")"
 
 # --- token-refresher.sh -------------------------------------------------------
 # Each stub fetch-token call takes the next line of the plan. The stub sleep
@@ -179,6 +267,19 @@ logs "refresher logs the new token's lifetime" "new access token, valid for 3600
 
 refresh 300
 check "refresher sleeps at least 60s, even for a short lifetime" "60 " "$(slept)"
+
+# With the real fetch-token.sh: an unusable lifetime used to end the refresher
+cat > "$TMP/real-fetch-token" <<'EOF'
+#!/bin/bash
+exec bash scripts/fetch-token.sh "$@"
+EOF
+chmod +x "$TMP/real-fetch-token"
+respond 200 "{\"access_token\": \"$TOKEN\", \"expires_in\": \"soon\"}"
+: > "$TMP/plan"; : > "$TMP/slept"; : > "$TMP/written"
+(PATH="$TMP/bin:$PATH" FETCH_TOKEN="$TMP/real-fetch-token" OUTBOUND_ADAPTER_DIR="$TMP/adapters" \
+    TENANT_ID=fake-tenant CLIENT_ID=fake-client-id CLIENT_SECRET="$SECRET" TOKEN_ENDPOINT="http://127.0.0.1:$PORT/token" \
+    timeout 20 bash scripts/token-refresher.sh stub > "$TMP/out" 2> "$TMP/err" || :) 2>/dev/null
+check "refresher survives an unusable lifetime" "3000 " "$(slept)"
 
 echo
 echo "$pass passed, $fail failed"

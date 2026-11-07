@@ -454,7 +454,7 @@ through the relay mailbox, and whether Microsoft accepts them is **not yet teste
 - `bash test/token.test.sh` — unit tests for fetching and refreshing the token
   against a local mock endpoint, with a stub adapter and a stub `sleep` (needs bash,
   curl, python3, jq): every failure path exits 1 and keeps the client secret and
-  the token out of the log.
+  the token out of the log, and both stay off any command line.
 - `./test/tls-cert.test.sh` — unit tests for choosing the certificate, with real
   `openssl` and a stub `postfix`, no Docker: source order, every FATAL, mismatches,
   what the watcher does on a pass, expiry warnings and the self-signed rules.
