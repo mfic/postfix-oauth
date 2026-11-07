@@ -284,8 +284,28 @@ fresh; mount_pair "$GOOD"
 tls_cert install
 mount_pair "$RENEWED"; echo 1 > "$TMP/postfix-status"
 tls_cert tick
-check "a failed reload is warned about" "WARNING: could not install the new certificate from config/tls." "$(err)"
+RELOAD_WARNING="WARNING: the new certificate from config/tls is in place, but Postfix did not reload; trying again."
+check "a failed reload is warned about" "$RELOAD_WARNING" "$(err)"
 check "and not logged as installed" "" "$(out)"
+tls_cert tick
+check "the next tick tries again" 2 "$(reloads)"
+check "and warns again" "$RELOAD_WARNING" "$(err)"
+echo 0 > "$TMP/postfix-status"
+tls_cert tick
+check "the tick after a reload that works" 3 "$(reloads)"
+logged "logs the certificate as installed" out '^TLS certificate: installed a new one from config/tls, expires '
+check "and warns no more" "" "$(err)"
+tls_cert tick
+check "and the next tick has nothing to do" 3 "$(reloads)"
+
+fresh; mount_pair "$GOOD"
+tls_cert install
+mount_pair "$RENEWED"; echo 1 > "$TMP/postfix-status"
+tls_cert tick
+echo 0 > "$TMP/postfix-status"
+tls_cert install
+tls_cert tick
+check "a restart settles a reload still owed" 1 "$(reloads)"
 
 fresh; mount_pair "$GOOD"; rm -r "${R:?}/etc"
 tls_cert tick

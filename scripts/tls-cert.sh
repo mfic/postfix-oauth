@@ -15,6 +15,7 @@ set -u
 CERT="${TLS_CERT_FILE:-/etc/postfix/cert.pem}"
 KEY="${TLS_KEY_FILE:-/etc/postfix/key.pem}"
 SOURCE_MARK="${TLS_SOURCE_MARK:-/etc/postfix/cert.source}"
+RELOAD_OWED="$SOURCE_MARK.reload-owed" # a certificate is in place that Postfix hasn't been told about
 MOUNT_DIR="${TLS_MOUNT_DIR:-/config/tls}"
 LETSENCRYPT_DIR="${TLS_LETSENCRYPT_LIVE:-/etc/letsencrypt/live}/${POSTFIX_HOSTNAME:-}"
 WATCH_SECONDS="${TLS_WATCH_SECONDS:-300}"
@@ -61,6 +62,7 @@ warn_if_expiring() {
 }
 
 install_at_boot() {
+    rm -f "$RELOAD_OWED" # Postfix hasn't started yet, so it will read whatever is here
     if { [ -f "$MOUNT_DIR/cert.pem" ] && [ ! -f "$MOUNT_DIR/key.pem" ]; } \
         || { [ ! -f "$MOUNT_DIR/cert.pem" ] && [ -f "$MOUNT_DIR/key.pem" ]; }; then
         echo "FATAL: /config/tls needs both cert.pem and key.pem." >&2
@@ -119,10 +121,16 @@ watch_tick() {
     if find_source && ! { cmp -s "$src_cert" "$CERT" && cmp -s "$src_key" "$KEY"; }; then
         if ! pair_matches "$src_cert" "$src_key"; then
             echo "WARNING: the certificate from $src_name and its key don't belong together; keeping the current one." >&2
-        elif install_source && postfix reload >/dev/null 2>&1; then
-            echo "TLS certificate: installed a new one from $src_name, $(describe)."
-        else
+        elif ! { install_source && : > "$RELOAD_OWED"; }; then
             echo "WARNING: could not install the new certificate from $src_name." >&2
+        fi
+    fi
+    if [ -f "$RELOAD_OWED" ]; then
+        if postfix reload >/dev/null 2>&1; then
+            rm -f "$RELOAD_OWED"
+            echo "TLS certificate: installed a new one from $(cat "$SOURCE_MARK"), $(describe)."
+        else
+            echo "WARNING: the new certificate from $(cat "$SOURCE_MARK") is in place, but Postfix did not reload; trying again." >&2
         fi
     fi
     today=$(date +%F)

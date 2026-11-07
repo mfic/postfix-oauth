@@ -55,7 +55,8 @@ check() { # check <name> <expected-regex> <output>
         echo "FAIL: $1 - expected /$2/, got:"; printf '%s\n' "$3" | sed 's/^/  | /'; fail=$((fail+1))
     fi
 }
-absent() { # absent <check name> <regex> <output>
+absent() { # absent <check name> <regex> <output>. No output proves nothing, so it fails.
+    if [ -z "$3" ]; then check "$1" 'absent, in real output' 'no output'; return; fi
     if printf '%s\n' "$3" | grep -qE "$2"; then check "$1" 'absent' "found /$2/"; else check "$1" 'absent' 'absent'; fi
 }
 

@@ -82,7 +82,7 @@ fi
 # these headers.
 original_sender=$(printf '%s\n' "$report" | sed -n 's/^X-Postfix-Sender: *rfc822; *//p' | head -n 1)
 original_subject=$(awk '
-    /^Content-Type: (message\/rfc822|text\/rfc822-headers)/ { part = 1; next }
+    !part && /^Content-Type: (message\/rfc822|text\/rfc822-headers)/ { part = 1; next }
     part == 1 && /^$/ { part = 2; next }
     part == 2 && /^$/ { exit }
     part == 2 && /^[ \t]/ { if (found) { sub(/^[ \t]+/, " "); subject = subject $0 } next }

@@ -17,12 +17,15 @@ fatal() { echo "FATAL: $1" >&2; exit 1; }
 # read_entries <file>: fills ENTRIES with the lines that hold something, without
 # their line endings. A missing file has no entries. Comments are whole lines
 # only: an inline '#' means something different in each file, and in a password
-# it is a '#'. Runs in the calling shell, so that a FATAL can stop it.
+# it is a '#'. A byte order mark, as Windows editors write them, is dropped. Runs in
+# the calling shell, so that a FATAL can stop it.
 read_entries() {
-    local line
+    local line first=yes
     ENTRIES=()
     [ -f "$1" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$first" ] || line=${line#$'\xef\xbb\xbf'}
+        first=""
         while [[ "$line" == *$'\r' ]]; do line=${line%$'\r'}; done
         [[ "$line" =~ ^[[:space:]]*(#|$) ]] || ENTRIES+=("$line")
     done < "$1"

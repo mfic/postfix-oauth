@@ -122,6 +122,18 @@ check "allowed_senders without final newline: last address kept" $'one@example.c
 fresh; config allowed_senders $'\xc3\x84@EXAMPLE.com\n'; load
 check "allowed_senders: lowercases ASCII only, other bytes stay" $'\xc3\x84@example.com OK' "$(table allowed_senders)"
 
+# A byte order mark, as Windows editors write them, is not part of the first line
+BOM=$'\xef\xbb\xbf'
+fresh; config allowed_senders "${BOM}One@example.com"$'\ntwo@example.com\n'; load
+accepted "allowed_senders with a BOM"
+check "allowed_senders with a BOM: first address intact" $'one@example.com OK\ntwo@example.com OK' "$(table allowed_senders)"
+fresh; config allowed_senders "${BOM}# comment"$'\none@example.com\n'; load
+check "allowed_senders with a BOM before a comment" 'one@example.com OK' "$(table allowed_senders)"
+fresh; config allowed_senders "$BOM"; load
+refused "allowed_senders with only a BOM" "$COMMENT_ONLY"
+fresh; config allowed_senders $'one@example.com\n'"${BOM}two@example.com"$'\n'; load
+check "allowed_senders: only the first line can have a BOM" $'one@example.com OK\n'"${BOM}two@example.com OK" "$(table allowed_senders)"
+
 # ------------------------------------------------------------ client_accounts
 fresh; load
 accepted "client_accounts missing"
@@ -149,6 +161,9 @@ check "client_accounts: accounts in the hostname's realm" \
 logged "client_accounts: count logged" "Loaded 2 SASL client account(s)."
 check "client_accounts: sasldb owner and mode" "postfix:sasl 640" "$(stat -c '%U:%G %a' /etc/sasldb2)"
 check "client_accounts: password stored" yes "$(in_sasldb pw-lobby)"
+
+fresh; config client_accounts "${BOM}lobby pw-lobby"$'\n'; load
+check "client_accounts with a BOM: the name is intact" 'lobby@mailrelay.test: userPassword' "$(accounts)"
 
 fresh; config client_accounts $'lobby pw-lobby\nhr pw-last'; load
 accepted "client_accounts without final newline"
@@ -227,6 +242,10 @@ logged "trusted_networks: count" "Loaded 6 trusted network(s)."
 
 fresh; config client_accounts $'lobby pw-lobby\n'; config trusted_networks $'192.0.2.1\n'; load
 check "trusted_networks: accounts leave the printed value alone" " 192.0.2.1" "$MYNETWORKS"
+
+fresh; config trusted_networks $'\xef\xbb\xbf192.0.2.1\n'; load
+accepted "trusted_networks with a BOM"
+check "trusted_networks with a BOM: the address is intact" " 192.0.2.1" "$MYNETWORKS"
 
 fresh; config trusted_networks $'# heading\r\n192.0.2.1\r\n\r\n10.0.0.0/8 # subnet\r\n2001:db8::/32\r\n'; load
 accepted "trusted_networks CRLF"

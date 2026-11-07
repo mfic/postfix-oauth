@@ -85,6 +85,17 @@ notice "$POLLUTED" details
 check "report lookalikes in a scan don't reach the log" \
     "original message ABC123, failed recipients user@example.org,second@example.org" "$(cat "$TMP/out")"
 
+# --- a failed message that is itself a message/rfc822 ----------------------------
+# Its own Content-Type must not pass for the report's part, on either side of its Subject
+EMBEDDED=$'Content-Type: message/rfc822\r\n\r\nSubject: planted subject\r\n\r\nSCAN\r\n'
+plain "${BOUNCE//$'\r\n\r\nSCAN CONTENT MARKER\r\n'/$'\r\n'$EMBEDDED}"
+has_text "own type after the Subject: the top-level Subject is shown" 'Subject:  Scan from lobby printer'
+lacks_text "own type after the Subject: the embedded one isn't" 'planted'
+AFTER_TO=${BOUNCE//$'To: user@example.org\r\nSubject: Scan from'/$'To: user@example.org\r\nContent-Type: message/rfc822\r\nSubject: Scan from'}
+plain "${AFTER_TO//$'\r\n\r\nSCAN CONTENT MARKER\r\n'/$'\r\n\r\nSubject: planted subject\r\n\r\nSCAN\r\n'}"
+has_text "own type before the Subject: the top-level Subject is shown" 'Subject:  Scan from lobby printer'
+lacks_text "own type before the Subject: the embedded one isn't" 'planted'
+
 # --- optionally the failed message is attached --------------------------------
 attached "$BOUNCE"
 check "attached notice exits 0" "0" "$(cat "$TMP/exit")"
