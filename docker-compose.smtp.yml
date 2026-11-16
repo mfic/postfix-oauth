@@ -29,7 +29,7 @@ services:
   # Off unless .env has COMPOSE_PROFILES=letsencrypt (README step 4). Holds the
   # Cloudflare token, so the relay doesn't.
   certbot:
-    image: certbot/dns-cloudflare:v5.9.0
+    image: certbot/dns-cloudflare:v5.10.0
     container_name: postfix-m365-certbot
     profiles: [letsencrypt]
     restart: unless-stopped
